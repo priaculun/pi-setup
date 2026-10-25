@@ -288,6 +288,14 @@ function apply() {
 		log.info("no secrets.env yet — trying `secrets pull`");
 		secretsPull({ quiet: true });
 	}
+	// Fresh machine: let tsk register its herdr plugin + shortcuts BEFORE our herdr config exists,
+	// otherwise tsk refuses non-interactively ("prefix+t is already assigned"). render then adopts the file.
+	let tskHerdrDone = false;
+	if (!flag("--dry-run") && !flag("--no-post") && has("tsk") && has("herdr") && !fs.existsSync(path.join(P.herdr, "config.toml"))) {
+		const x = run("tsk", ["setup", "herdr"]);
+		tskHerdrDone = x.code === 0;
+		tskHerdrDone ? log.ok("tsk -> herdr plugin") : log.warn(`tsk -> herdr plugin failed: ${(x.err || x.out).split("\n")[0]}`);
+	}
 	const r = render();
 	if (flag("--dry-run")) return;
 
@@ -309,7 +317,7 @@ function apply() {
 			x.code === 0 ? log.ok(name) : log.warn(`${name} failed: ${(x.err || x.out).split("\n")[0]}`);
 		};
 		step("herdr integration (pi)", has("herdr"), "herdr", ["integration", "install", "pi"]);
-		step("tsk -> herdr plugin", has("tsk"), "tsk", ["setup", "herdr"]);
+		if (!tskHerdrDone) step("tsk -> herdr plugin", has("tsk"), "tsk", ["setup", "herdr"]);
 		step("tsk -> pi skill", has("tsk"), "tsk", ["setup", "pi"]);
 		const cbm = has("codebase-memory-mcp") ? "codebase-memory-mcp" : path.join(P.bin, "codebase-memory-mcp");
 		for (const [k, v] of Object.entries(CBM_CONFIG)) step(`cbm config ${k}=${v}`, has("codebase-memory-mcp") || fs.existsSync(cbm), cbm, ["config", "set", k, v]);
