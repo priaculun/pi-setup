@@ -27,9 +27,9 @@ function Node-Ok {
 }
 Refresh-Path
 
-$tools = "git", "gh", "jq", "node", "pi", "herdr", "tsk", "codebase-memory-mcp"
+$toolList = "git", "gh", "jq", "node", "pi", "herdr", "tsk", "codebase-memory-mcp"
 if ($Check) {
-  foreach ($t in $tools) { if (Have $t) { "  ok       $t" } else { "  missing  $t" } }
+  foreach ($t in $toolList) { if (Have $t) { "  ok       $t" } else { "  missing  $t" } }
   if (-not (Node-Ok)) { "  node >= 22.19 required" }
   exit 0
 }
