@@ -67,6 +67,7 @@ All logic is one cross-platform Node script, `scripts/setup.mjs`:
 | `capture [--prune] [--dry-run]` | copy the live setup back into the repo (redacted), update lock + CHANGELOG |
 | `scan` | secret scan of the repo |
 | `secrets init\|pull\|push\|check\|path` | manage `secrets.env` (see SECRETS.md) |
+| `reset [--dry-run] [--yes]` | clean slate: move old Pi config to `~/.pi-backup-<stamp>/` (keeps Pi install, remote pairing, secrets) |
 | `selftest` | render into a temp HOME and check idempotence, drift guard, redaction (CI) |
 
 Safety: `render` never overwrites a file you changed locally (it compares against the hash it
@@ -85,6 +86,7 @@ The machine you work on is the source of truth; the repo follows it.
 | Delete a skill/agent/extension | delete live → `capture --prune` → commit |
 | New provider / MCP / key | edit live → `capture` (redacts to `${…}`) → `secrets push` → document in SECRETS.md |
 | Other machine | `git pull` → `node scripts/setup.mjs apply` |
+| Other machine, replace old setup | `node scripts/setup.mjs reset` → `./bootstrap.sh` |
 
 `capture` always runs `scan` and exits non-zero if anything secret-like remains. CI runs `scan`,
 `selftest`, `shellcheck`, `node --check` and gitleaks on every push.

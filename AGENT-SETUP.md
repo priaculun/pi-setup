@@ -9,7 +9,7 @@ Follow the steps in order. Do not improvise around failures; report them.
   `secrets.env` lives outside the repo (`node scripts/setup.mjs secrets path`).
 - Never commit `secrets.env`, `*.bak-*`, or anything under `~/.pi/agent/{sessions,git,npm/node_modules}`.
 - Do not edit files under `~/.pi/agent` by hand to "make it work" — fix the repo and re-run `apply`.
-- Ask the user before: `apply --force`, `capture --prune`, `secrets push`, installing extra system packages.
+- Ask the user before: `reset`, `apply --force`, `capture --prune`, `secrets push`, installing extra system packages.
 - Files written by other tools are **not** managed here (do not copy them in):
   `extensions/herdr-agent-state.ts` (herdr), `skills/tsk-cli` (tsk), `~/.pi/remote/skills/agent-network` (remote-pi).
 
@@ -35,6 +35,27 @@ node scripts/setup.mjs secrets check     # names only, never values
 ```
 
 Missing secrets do not break anything: that template is skipped and `doctor` reports an error.
+
+## 2b. Replace an existing Pi setup (only if the user asked for a clean install)
+
+If this machine already has Pi config the user wants replaced, run `reset` **before** apply.
+Nothing is deleted: old config moves to `~/.pi-backup-<timestamp>/`.
+
+```sh
+node scripts/setup.mjs reset --dry-run    # show what would move; changes nothing
+node scripts/setup.mjs reset              # refuses while any pi process is running
+```
+
+| reset does | Details |
+|---|---|
+| Moves to backup | everything in `~/.pi/agent` (settings, models, mcp, extensions, skills, sessions, auth, caches) + herdr `config.toml` |
+| Keeps | Pi install (`~/.pi/agent/{bin,install,win-git-bash}` of the official installer), `~/.pi/remote` (phone pairing), `secrets.env` |
+| Removes | `~/.config/pi-setup/state.json` (so render treats the machine as new) |
+
+- If it reports running pi processes: ask the user to close them. Use `--yes` only if the user confirms
+  (e.g. you yourself are running inside Pi — then tell the user to restart Pi after apply).
+- After apply, OAuth logins (`/login`) must be redone; sessions can be copied back from
+  `<backup>/agent/sessions` if the user wants them.
 
 ## 3. Apply
 

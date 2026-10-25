@@ -8,6 +8,7 @@
  *   node scripts/setup.mjs capture [--prune] [--dry-run]     # live machine -> repo (redacted)
  *   node scripts/setup.mjs scan                              # secret scan of the repo
  *   node scripts/setup.mjs secrets <init|pull|push|check|path>
+ *   node scripts/setup.mjs reset   [--dry-run] [--yes]       # move old Pi config to ~/.pi-backup-<stamp>
  *   node scripts/setup.mjs selftest                          # CI: render into a temp HOME
  *
  * Templates (*.tmpl) contain ${NAME} placeholders filled from secrets.env.
@@ -680,6 +681,90 @@ function secretsCheck() {
 	for (const n of Object.keys(vars).filter((n) => !need.has(n))) log.info(`${n} unused by templates`);
 }
 
+// ---------------------------------------------------------------- reset
+/** Running Pi processes (excluding us). Best effort: [] if the process list is unavailable. */
+function runningPi() {
+	const r = IS_WIN
+		? run("powershell", ["-NoProfile", "-Command", "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.CommandLine)\" }"])
+		: run("ps", ["-Ao", "pid=,args="]);
+	if (r.code !== 0) return [];
+	const re = /pi-coding-agent|(^|[\\/\s])pi(\.cmd|\.exe)?(\s|$)/;
+	return r.out.split(/\r?\n/).map((l) => l.trim()).filter((l) => {
+		const pid = Number(l.split(/\s+/)[0]);
+		return pid && pid !== process.pid && pid !== process.ppid && re.test(l.slice(String(pid).length)) && !l.includes("setup.mjs");
+	});
+}
+
+/**
+ * Entries of the agent dir that belong to the Pi installation itself, not to the config.
+ * The official installer (pi.dev/install.sh|ps1) uses bin/ (launcher), install/ (releases +
+ * current-version) and, on Windows, win-git-bash/. Kept only if they exist.
+ */
+const PI_INSTALL_ENTRIES = ["bin", "install", "win-git-bash"];
+function piInstallEntries(dir) {
+	return PI_INSTALL_ENTRIES.filter((e) => fs.existsSync(path.join(dir, e)));
+}
+
+function moveInto(src, dst) {
+	fs.mkdirSync(path.dirname(dst), { recursive: true });
+	try {
+		fs.renameSync(src, dst);
+	} catch (e) {
+		if (e.code !== "EXDEV") throw e; // different filesystem: copy, then delete
+		fs.cpSync(src, dst, { recursive: true, verbatimSymlinks: true });
+		fs.rmSync(src, { recursive: true, force: true });
+	}
+}
+
+/**
+ * Clean slate before apply. Nothing is deleted: old config moves to ~/.pi-backup-<stamp>/.
+ * Kept in place: the Pi install itself (bin/, install/, win-git-bash/ of the official installer), ~/.pi/remote (phone pairing),
+ * secrets.env. Removed: state.json (so render treats the machine as new).
+ */
+function reset({ dry = flag("--dry-run"), yes = flag("--yes") } = {}) {
+	const P = paths();
+	const busy = process.env.PI_SETUP_HOME ? [] : runningPi();
+	if (busy.length && !yes) {
+		log.err(`Pi is running (${busy.length} process(es)) — close every pi session, or rerun with --yes:`);
+		busy.slice(0, 5).forEach((l) => console.log(`      ${l.slice(0, 120)}`));
+		process.exitCode = 1;
+		return null;
+	}
+	const backup = path.join(P.home, `.pi-backup-${stamp()}`);
+	const keep = fs.existsSync(P.agent) ? piInstallEntries(P.agent) : [];
+	const moves = [];
+	if (fs.existsSync(P.agent)) {
+		for (const e of fs.readdirSync(P.agent)) {
+			if (keep.includes(e)) continue;
+			moves.push([path.join(P.agent, e), path.join(backup, "agent", e)]);
+		}
+	}
+	const herdrCfg = path.join(P.herdr, "config.toml");
+	if (fs.existsSync(herdrCfg)) moves.push([herdrCfg, path.join(backup, "herdr", "config.toml")]);
+
+	log.info(`${dry ? "[dry-run] " : ""}backup -> ${backup}`);
+	if (keep.length) log.info(`keep  ${keep.map((e) => path.join(P.agent, e)).join(", ")} (Pi install)`);
+	log.info(`keep  ${P.remote} (remote-pi pairing), ${P.secrets}`);
+	for (const [src, dst] of moves) {
+		log.info(`move  ${path.relative(P.home, src)}`);
+		if (!dry) moveInto(src, dst);
+	}
+	if (fs.existsSync(P.state)) {
+		log.info(`remove ${path.relative(P.home, P.state)}`);
+		if (!dry) fs.rmSync(P.state);
+	}
+	if (dry) return { backup, moves, keep };
+	if (moves.length) {
+		writeFile(path.join(backup, "README.txt"),
+			`pi-setup reset backup (${new Date().toISOString()})\n` +
+			`agent/  = old ${P.agent}\nherdr/  = old ${P.herdr}\n` +
+			`Restore sessions: copy agent/sessions back into ${P.agent}/sessions\n`);
+		log.ok(`reset done: ${moves.length} item(s) moved to ${backup}`);
+	} else log.ok("reset: nothing to move");
+	log.info("next: ./bootstrap.sh (Windows: bootstrap.ps1) or node scripts/setup.mjs apply");
+	return { backup, moves, keep };
+}
+
 // ---------------------------------------------------------------- selftest
 function selftest() {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-setup-"));
@@ -726,6 +811,22 @@ function selftest() {
 	if (red.text.includes("sk-abc") || red.text.includes("100.100") || red.found.PI_KEY_X_Y !== "sk-abcdefghijklmnopqrstuvwxyz" || red.found.PI_HOST_X_Y !== "100.100.1.2") [fail] = [fail + 1, log.err("redaction failed")];
 	const mcp = redact("mcp.json", JSON.stringify({ mcpServers: { a: { url: "https://x.dev/mcp", headers: { Authorization: "Bearer hs-local-zzz" } } } }));
 	if (mcp.text.includes("hs-local") || !mcp.text.includes("Bearer ${MCP_A_TOKEN}")) [fail] = [fail + 1, log.err("mcp redaction failed")];
+	// reset: everything moves to the backup, remote + secrets stay, re-render works from scratch
+	writeSecrets(P.secrets, fake);
+	writeFile(path.join(P.agent, "sessions", "s1.jsonl"), "{}\n");
+	writeFile(path.join(P.remote, "peers.json"), "{}");
+	writeFile(path.join(P.agent, "bin", "pi"), "#!/bin/sh\n");
+	writeFile(path.join(P.agent, "install", "current-version"), "1.4.0\n");
+	const dryRes = reset({ dry: true, yes: true });
+	if (!fs.existsSync(path.join(P.agent, "AGENTS.md")) || !dryRes.moves.length) [fail] = [fail + 1, log.err("reset --dry-run changed files")];
+	const rs = reset({ dry: false, yes: true });
+	const leftover = fs.existsSync(P.agent) ? fs.readdirSync(P.agent).sort() : [];
+	if (leftover.join() !== "bin,install") [fail] = [fail + 1, log.err(`reset left: ${leftover.join(", ")}`)];
+	if (!fs.existsSync(path.join(rs.backup, "agent", "sessions", "s1.jsonl"))) [fail] = [fail + 1, log.err("reset lost sessions")];
+	if (!fs.existsSync(path.join(rs.backup, "herdr", "config.toml"))) [fail] = [fail + 1, log.err("reset missed herdr config")];
+	if (!fs.existsSync(path.join(P.remote, "peers.json")) || !fs.existsSync(P.secrets) || fs.existsSync(P.state)) [fail] = [fail + 1, log.err("reset touched remote/secrets or kept state")];
+	const r3 = render({ force: false, dry: false });
+	if (r3.drift.length || r3.missing.size || !fs.existsSync(path.join(P.agent, "models.json"))) [fail] = [fail + 1, log.err("render after reset failed")];
 	fs.rmSync(tmp, { recursive: true, force: true });
 	fail ? (log.err(`selftest: ${fail} failure(s)`), (process.exitCode = 1)) : log.ok("selftest passed");
 }
@@ -739,6 +840,7 @@ switch (cmd) {
 	case "doctor": doctor(); break;
 	case "capture": capture(); break;
 	case "scan": scan(); break;
+	case "reset": reset(); break;
 	case "selftest": selftest(); break;
 	case "secrets":
 		if (sub === "pull") secretsPull();

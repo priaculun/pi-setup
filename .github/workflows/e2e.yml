@@ -29,6 +29,13 @@ jobs:
           node scripts/setup.mjs render | tee /tmp/render.log
           grep -q ' 0 written, .* 0 drift, 0 missing' /tmp/render.log
           pr-gate --help >/dev/null
+      - name: reset + apply again
+        run: |
+          export PATH="$HOME/.local/bin:$HOME/.pi/agent/bin:$PATH"
+          node scripts/setup.mjs reset --yes
+          pi --version
+          node scripts/setup.mjs apply
+          test "$(ls -d ~/.pi-backup-* | wc -l)" -ge 1
 
   windows:
     runs-on: windows-latest
@@ -55,4 +62,14 @@ jobs:
           $r
           if (-not ($r -match ' 0 written, .* 0 drift, 0 missing')) { exit 1 }
           pr-gate.cmd --help
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: reset + apply again
+        shell: pwsh
+        run: |
+          $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User") + ";$env:USERPROFILE\.local\bin;$env:USERPROFILE\.pi\agent\bin"
+          node scripts/setup.mjs reset --yes
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          pi --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          node scripts/setup.mjs apply
           if ($LASTEXITCODE -ne 0) { exit 1 }
