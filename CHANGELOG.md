@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-25 (capture)
+
+- tool herdr: 0.9.0 -> 0.9.5
+
 ## 2026-10-25 — initial
 
 - Initial capture: Pi 1.4.0, 12 packages (see packages.lock.json), 8 providers, 2 MCP servers,
