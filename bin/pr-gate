@@ -1,0 +1,323 @@
+#!/usr/bin/env bash
+# pr-gate — merge gate for parallel agent PRs.
+#
+# Replaces GitHub branch protection, which is unavailable for private repos on
+# GitHub Free. Every merge goes through `pr-gate merge`; the `merge-guard` Pi
+# extension blocks agents from merging any other way.
+#
+# Merge requires: PR open + not draft + no conflicts, all CI checks green,
+# branch not behind base, a reviewer verdict bound to the current head SHA,
+# and — for high-risk PRs — a human approval bound to the same SHA.
+#
+# Deps: bash 3.2+, gh, jq.  Exit codes: 0 ok, 1 not mergeable, 2 usage/error.
+# shellcheck disable=SC2016  # $vars inside single quotes are jq variables, not shell.
+set -euo pipefail
+
+VERSION="1.0.0"
+LOW_MAX_LINES=100    # <= this (and no other signal) → low
+HIGH_MIN_LINES=400   # > this → high
+
+# Path classes (ERE, matched case-insensitively). A repo can ADD patterns in
+# .github/risk-paths on the base branch ("high <ERE>" / "medium <ERE>"); it
+# can never lower the defaults.
+HIGH_RE='(^|[/_.-])(auth|oauth|jwt|login|sessions?|passwords?|secrets?|credentials?|crypto|payments?|billing|invoices?|checkout|wallets?|refunds?|migrations?)([/_.-]|$)|^\.github/workflows/|(^|/)dockerfile|docker-compose|(^|/)\.env|\.sql$|(^|/)(infra|terraform|k8s|helm|deploy)/|schema\.prisma$'
+MEDIUM_RE='(^|/)(package\.json|go\.mod|cargo\.toml|pyproject\.toml|requirements[^/]*\.txt|composer\.json|gemfile)$'
+LOCK_RE='(^|/)(package-lock\.json|bun\.lockb?|pnpm-lock\.yaml|yarn\.lock|go\.sum|cargo\.lock|poetry\.lock|composer\.lock|gemfile\.lock)$'
+DOCS_RE='\.(md|mdx|txt|rst|adoc)$|^docs/|(^|/)(__tests__|tests?|specs?|testdata|fixtures)/|\.(test|spec)\.[cm]?[jt]sx?$|_test\.(go|py)$|(^|/)test_[^/]*\.py$'
+
+REVIEW_MARK="pr-gate-review"
+HUMAN_MARK="pr-gate-human"
+
+die() { echo "pr-gate: $*" >&2; exit 2; }
+
+usage() {
+	cat <<'EOF'
+pr-gate — merge gate for parallel agent PRs
+
+Usage: pr-gate [-R owner/repo] <command> [args]
+
+  init                          Create the labels pr-gate uses
+  risk    <pr>                  Print risk level and reasons
+  check   <pr>                  Run every merge check (exit 0 = mergeable)
+  merge   <pr>                  check, then squash-merge pinned to head SHA
+  list                          Status table of all open PRs
+  review  <pr> approve|changes --body TEXT|--body-file F [--risk low|medium|high]
+                                Reviewer verdict, bound to the current head SHA
+  approve <pr>                  HUMAN ONLY: approve a high-risk PR at its head SHA
+EOF
+}
+
+# ---------- helpers ----------
+
+REPO=""
+resolve_repo() {
+	[ -n "$REPO" ] && return
+	REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) ||
+		die "not in a GitHub repo; pass -R owner/repo"
+}
+
+PR_FIELDS="number,title,url,state,isDraft,headRefOid,headRefName,baseRefName,mergeable,labels,statusCheckRollup,files,changedFiles,comments"
+PRJ=""
+load_pr() {
+	PRJ=$(gh pr view "$1" -R "$REPO" --json "$PR_FIELDS") || die "cannot load PR $1"
+	# GitHub computes mergeability lazily; ask once more if still unknown.
+	if [ "$(jq -r .mergeable <<<"$PRJ")" = "UNKNOWN" ]; then
+		sleep 3
+		PRJ=$(gh pr view "$1" -R "$REPO" --json "$PR_FIELDS")
+	fi
+}
+pj() { jq -r "$@" <<<"$PRJ"; }
+
+has_label() { [ "$(pj --arg l "$1" '[.labels[].name] | index($l) != null')" = "true" ]; }
+
+# Latest marker comment of a kind → "sha verdict risk" (empty if none).
+marker() {
+	local body
+	body=$(pj --arg m "<!-- $1 " '[.comments[] | select(.body | contains($m))] | last | .body // ""')
+	[ -z "$body" ] && return 0
+	printf '%s\n' "$body" | sed -n "s/.*<!-- $1 sha=\([0-9a-f]*\) verdict=\([a-z]*\) risk=\([a-z]*\) -->.*/\1 \2 \3/p" | tail -1
+}
+
+rank() { case "$1" in low) echo 1 ;; medium) echo 2 ;; high) echo 3 ;; *) echo 0 ;; esac; }
+max_level() { if [ "$(rank "$1")" -ge "$(rank "$2")" ]; then echo "$1"; else echo "$2"; fi; }
+
+# Merge repo-specific patterns from .github/risk-paths on the base branch.
+load_repo_patterns() {
+	local base cfg cls re
+	base=$(pj .baseRefName)
+	cfg=$(gh api "repos/$REPO/contents/.github/risk-paths?ref=$base" \
+		-H "Accept: application/vnd.github.raw" 2>/dev/null) || return 0
+	while read -r cls re; do
+		case "$cls" in
+		high) [ -n "$re" ] && HIGH_RE="$HIGH_RE|$re" ;;
+		medium) [ -n "$re" ] && MEDIUM_RE="$MEDIUM_RE|$re" ;;
+		esac
+	done <<<"$cfg"
+}
+
+# Sets RISK and RISK_WHY from the changed file list (path classes + size).
+compute_risk() {
+	load_repo_patterns
+	local paths listed changed lines sensitive dep nondocs
+	paths=$(pj '.files[].path')
+	listed=$(pj '.files | length')
+	changed=$(pj .changedFiles)
+	# Size ignores lockfiles: they are huge but mechanical.
+	lines=$(pj '.files[] | "\(.additions + .deletions)\t\(.path)"' |
+		LRE="$LOCK_RE" awk -F'\t' 'tolower($2) !~ ENVIRON["LRE"] { s += $1 } END { print s + 0 }')
+	sensitive=$(grep -Ei "$HIGH_RE" <<<"$paths" | head -3 | tr '\n' ' ' || true)
+	dep=$(grep -Ei "$MEDIUM_RE|$LOCK_RE" <<<"$paths" | head -3 | tr '\n' ' ' || true)
+	nondocs=$(grep -Eicv "$DOCS_RE" <<<"$paths" || true)
+	LINES=$lines
+
+	if [ "$changed" -gt "$listed" ]; then
+		RISK=high RISK_WHY="file list truncated ($changed files)"
+	elif [ -n "$sensitive" ]; then
+		RISK=high RISK_WHY="sensitive paths: $sensitive"
+	elif [ "$lines" -gt "$HIGH_MIN_LINES" ] && [ "$nondocs" -gt 0 ]; then
+		RISK=high RISK_WHY="$lines changed lines (> $HIGH_MIN_LINES)"
+	elif [ -n "$dep" ]; then
+		RISK=medium RISK_WHY="dependency files: $dep"
+	elif [ "$nondocs" -eq 0 ]; then
+		RISK=low RISK_WHY="docs/tests only"
+	elif [ "$lines" -le "$LOW_MAX_LINES" ]; then
+		RISK=low RISK_WHY="$lines changed lines (<= $LOW_MAX_LINES)"
+	else
+		RISK=medium RISK_WHY="$lines changed lines"
+	fi
+
+	# A reviewer may raise the level, never lower it.
+	local rv rv_risk
+	rv=$(marker "$REVIEW_MARK")
+	rv_risk=$(awk '{print $3}' <<<"$rv")
+	if [ -n "$rv_risk" ] && [ "$(rank "$rv_risk")" -gt "$(rank "$RISK")" ]; then
+		RISK=$rv_risk RISK_WHY="$RISK_WHY; raised to $rv_risk by reviewer"
+	fi
+	if [ "$(pj '.statusCheckRollup | length')" -eq 0 ] && [ "$RISK" != high ]; then
+		RISK=high RISK_WHY="$RISK_WHY; no CI checks on this repo"
+	fi
+}
+
+# Sets CI to green|pending|failed|none.
+ci_state() {
+	CI=$(pj '
+		.statusCheckRollup as $c
+		| if ($c | length) == 0 then "none"
+		  elif any($c[]; (.conclusion // "") as $k | (.state // "") as $s
+		      | ($k | IN("FAILURE","CANCELLED","TIMED_OUT","ACTION_REQUIRED","STARTUP_FAILURE","STALE"))
+		        or ($s | IN("FAILURE","ERROR"))) then "failed"
+		  elif any($c[]; (.status != null and .status != "COMPLETED")
+		      or ((.state // "") | IN("PENDING","EXPECTED"))) then "pending"
+		  else "green" end')
+}
+
+# Run all checks; prints a report, sets FAILS (count) and SHA/RISK.
+FAILS=0
+report() { # report ok|fail label detail
+	if [ "$1" = ok ]; then printf '  ✅ %-10s %s\n' "$2" "$3"; else printf '  ❌ %-10s %s\n' "$2" "$3"; FAILS=$((FAILS + 1)); fi
+}
+
+run_checks() {
+	load_pr "$1"
+	SHA=$(pj .headRefOid)
+	local base state draft mg behind rv rv_sha rv_verdict hm hm_sha
+	base=$(pj .baseRefName)
+	echo "PR #$(pj .number): $(pj .title)"
+	echo "   $(pj .url)  head ${SHA:0:7} → $base"
+
+	state=$(pj .state); draft=$(pj .isDraft); mg=$(pj .mergeable)
+	if [ "$state" = OPEN ] && [ "$draft" = false ]; then report ok state "open"; else report fail state "$state draft=$draft"; fi
+	if [ "$mg" = MERGEABLE ]; then report ok conflicts "none"; else report fail conflicts "mergeable=$mg (rebase on origin/$base)"; fi
+
+	ci_state
+	case "$CI" in
+	green) report ok ci "all checks green" ;;
+	*) report fail ci "$CI" ;;
+	esac
+
+	behind=$(gh api "repos/$REPO/compare/$base...$SHA" --jq .behind_by 2>/dev/null || echo "?")
+	if [ "$behind" = 0 ]; then report ok uptodate "contains latest $base"; else report fail uptodate "behind $base by $behind (git fetch && git rebase origin/$base && git push --force-with-lease)"; fi
+
+	compute_risk
+	printf '  ℹ️  %-10s %s (%s)\n' risk "$RISK" "$RISK_WHY"
+
+	rv=$(marker "$REVIEW_MARK")
+	rv_sha=$(awk '{print $1}' <<<"$rv"); rv_verdict=$(awk '{print $2}' <<<"$rv")
+	if [ -z "$rv" ]; then
+		report fail review "no pr-gate review yet"
+	elif [ "$rv_sha" != "$SHA" ]; then
+		report fail review "review is for ${rv_sha:0:7}, head is ${SHA:0:7} (re-review needed)"
+	elif [ "$rv_verdict" != approve ] || ! has_label review:approved; then
+		report fail review "verdict=$rv_verdict"
+	else
+		report ok review "approved at ${SHA:0:7}"
+	fi
+
+	if [ "$RISK" = high ]; then
+		hm=$(marker "$HUMAN_MARK"); hm_sha=$(awk '{print $1}' <<<"$hm")
+		if [ "$hm_sha" = "$SHA" ] && has_label human:approved; then
+			report ok human "approved at ${SHA:0:7}"
+		else
+			report fail human "high risk: human must run 'pr-gate approve $(pj .number)'"
+		fi
+	fi
+}
+
+notify() { # best-effort desktop/herdr notification
+	if [ "${HERDR_ENV:-}" = 1 ] && command -v herdr >/dev/null 2>&1; then
+		herdr notification show "$1" --body "$2" --sound "done" >/dev/null 2>&1 || true
+	fi
+}
+
+ensure_labels() {
+	gh label create review:approved -R "$REPO" --color 2da44e --description "pr-gate: reviewer approved" --force >/dev/null
+	gh label create review:changes -R "$REPO" --color d1242f --description "pr-gate: reviewer requested changes" --force >/dev/null
+	gh label create human:approved -R "$REPO" --color 8250df --description "pr-gate: human approved (high risk)" --force >/dev/null
+}
+
+# ---------- commands ----------
+
+cmd_check() {
+	run_checks "$1"
+	if [ "$FAILS" -eq 0 ]; then echo "→ MERGEABLE"; else echo "→ NOT MERGEABLE ($FAILS failing)"; return 1; fi
+}
+
+cmd_merge() {
+	local n="$1" head base others
+	cmd_check "$n" || exit 1
+	head=$(pj .headRefName); base=$(pj .baseRefName)
+	# --match-head-commit: refuse if anything was pushed after the checks ran.
+	gh pr merge "$n" -R "$REPO" --squash --match-head-commit "$SHA"
+	# Delete the remote branch via API: the local branch may still be checked
+	# out in a worktree, which would make `gh pr merge --delete-branch` fail.
+	gh api -X DELETE "repos/$REPO/git/refs/heads/$head" >/dev/null 2>&1 || true
+	echo "merged #$n (squash, risk=$RISK)"
+	[ "$RISK" != low ] && notify "PR #$n merged ($RISK)" "$(pj .title)"
+	others=$(gh pr list -R "$REPO" --base "$base" --json number,headRefName --jq '.[] | "#\(.number) \(.headRefName)"')
+	if [ -n "$others" ]; then
+		echo "Open PRs on $base must now rebase onto origin/$base and re-run CI:"
+		printf '%s\n' "$others" | sed 's/^/  /'
+	fi
+}
+
+cmd_risk() { load_pr "$1"; compute_risk; echo "$RISK	$RISK_WHY"; }
+
+cmd_list() {
+	local nums n
+	nums=$(gh pr list -R "$REPO" --json number --jq '.[].number')
+	[ -z "$nums" ] && { echo "no open PRs"; return 0; }
+	printf '%-6s %-7s %-8s %-6s %-9s %s\n' PR RISK CI BEHIND REVIEW TITLE
+	for n in $nums; do
+		load_pr "$n"; SHA=$(pj .headRefOid); ci_state; compute_risk
+		local behind rv rvs
+		behind=$(gh api "repos/$REPO/compare/$(pj .baseRefName)...$SHA" --jq .behind_by 2>/dev/null || echo "?")
+		rv=$(marker "$REVIEW_MARK")
+		if [ -z "$rv" ]; then rvs=none
+		elif [ "$(awk '{print $1}' <<<"$rv")" != "$SHA" ]; then rvs=stale
+		else rvs=$(awk '{print $2}' <<<"$rv"); fi
+		printf '%-6s %-7s %-8s %-6s %-9s %s\n' "#$n" "$RISK" "$CI" "$behind" "$rvs" "$(pj .title | cut -c1-50)"
+	done
+}
+
+cmd_review() {
+	local n="$1" verdict="${2:-}" body="" risk="" ; shift 2 || die "usage: review <pr> approve|changes --body TEXT"
+	case "$verdict" in approve | changes) ;; *) die "verdict must be approve or changes" ;; esac
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		--body) body="$2"; shift 2 ;;
+		--body-file) body=$(cat "$2"); shift 2 ;;
+		--risk) risk="$2"; shift 2 ;;
+		*) die "unknown option $1" ;;
+		esac
+	done
+	[ -n "$body" ] || die "--body or --body-file is required (summarise findings)"
+	case "$risk" in "" | low | medium | high) ;; *) die "--risk must be low|medium|high" ;; esac
+	load_pr "$n"; SHA=$(pj .headRefOid)
+	[ -z "$risk" ] && risk=low   # "low" = no raise; computed risk still applies
+	ensure_labels
+	gh pr comment "$n" -R "$REPO" --body "$(printf '%s\n\n<!-- %s sha=%s verdict=%s risk=%s -->' "$body" "$REVIEW_MARK" "$SHA" "$verdict" "$risk")" >/dev/null
+	if [ "$verdict" = approve ]; then
+		gh pr edit "$n" -R "$REPO" --add-label review:approved >/dev/null
+		gh pr edit "$n" -R "$REPO" --remove-label review:changes >/dev/null 2>&1 || true
+	else
+		gh pr edit "$n" -R "$REPO" --add-label review:changes >/dev/null
+		gh pr edit "$n" -R "$REPO" --remove-label review:approved >/dev/null 2>&1 || true
+	fi
+	echo "review recorded: #$n $verdict at ${SHA:0:7} (risk raise: $risk)"
+}
+
+cmd_approve() {
+	local n="$1"
+	load_pr "$n"; SHA=$(pj .headRefOid)
+	ensure_labels
+	gh pr comment "$n" -R "$REPO" --body "$(printf 'Human approval for high-risk merge.\n\n<!-- %s sha=%s verdict=approve risk=high -->' "$HUMAN_MARK" "$SHA")" >/dev/null
+	gh pr edit "$n" -R "$REPO" --add-label human:approved >/dev/null
+	echo "human approval recorded: #$n at ${SHA:0:7}"
+}
+
+# ---------- main ----------
+
+command -v gh >/dev/null || die "gh not found"
+command -v jq >/dev/null || die "jq not found"
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-R | --repo) REPO="$2"; shift 2 ;;
+	-h | --help) usage; exit 0 ;;
+	--version) echo "pr-gate $VERSION"; exit 0 ;;
+	*) break ;;
+	esac
+done
+[ $# -ge 1 ] || { usage; exit 2; }
+cmd="$1"; shift
+resolve_repo
+case "$cmd" in
+init) ensure_labels; echo "labels ready on $REPO" ;;
+risk) [ $# -ge 1 ] || die "usage: risk <pr>"; cmd_risk "$1" ;;
+check) [ $# -ge 1 ] || die "usage: check <pr>"; cmd_check "$1" ;;
+merge) [ $# -ge 1 ] || die "usage: merge <pr>"; cmd_merge "$1" ;;
+list) cmd_list ;;
+review) [ $# -ge 2 ] || die "usage: review <pr> approve|changes --body TEXT"; cmd_review "$@" ;;
+approve) [ $# -ge 1 ] || die "usage: approve <pr>"; cmd_approve "$1" ;;
+*) usage; exit 2 ;;
+esac

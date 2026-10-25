@@ -1,0 +1,5 @@
+{
+  "_comment": "Overlay for ontoken-auto. Only include keys you want to change. Project file: <cwd>/.pi/ontoken-auto.json wins.",
+  "budget": "balanced",
+  "enabled": false
+}

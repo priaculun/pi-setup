@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "ontoken-media": {
+      "url": "https://api.ontoken.id/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MCP_ONTOKEN_MEDIA_TOKEN}"
+      }
+    },
+    "hindsight-omp": {
+      "url": "http://${MCP_HOST_HINDSIGHT_OMP}:8888/mcp/omp/",
+      "headers": {
+        "Authorization": "Bearer ${MCP_HINDSIGHT_OMP_TOKEN}",
+        "X-Bank-Id": "omp"
+      },
+      "description": "Long-term memory of the user (bank omp): past decisions, setups, projects, preferences.",
+      "toolExposure": {
+        "recall": "direct",
+        "retain": "direct",
+        "reflect": "direct"
+      }
+    }
+  }
+}

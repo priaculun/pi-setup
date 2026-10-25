@@ -1,0 +1,19 @@
+{
+  "packages": [
+    "npm:pi-quiet-tools",
+    "npm:pi-codebase-memory-mcp",
+    "npm:remote-pi",
+    "npm:pi-web-access",
+    "npm:pi-ayu-themes",
+    "npm:pi-schedule-prompt",
+    "npm:@tintinweb/pi-tasks",
+    "https://github.com/priaculun/self-compact",
+    "https://github.com/priaculun/ontoken-auto",
+    "npm:@ff-labs/pi-fff",
+    "npm:@tintinweb/pi-subagents",
+    "https://github.com/priaculun/pc-better-custom"
+  ],
+  "theme": "ayu-dark",
+  "defaultProvider": "ontoken",
+  "defaultModel": "auto"
+}

@@ -1,0 +1,58 @@
+name: e2e
+# Full install on clean runners: bootstrap (tools only) + apply with fake secrets.
+# Manual: it downloads Pi, herdr, tsk, codebase-memory-mcp and all Pi packages.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: bootstrap --tools
+        run: ./bootstrap.sh --tools
+      - name: fake secrets
+        run: |
+          mkdir -p ~/.config/pi-setup
+          grep -E '^[A-Z]' secrets.env.example | sed -E 's/^(.*HOST.*)=$/\1=10.0.0.9/; s/=$/=fake-value/' > ~/.config/pi-setup/secrets.env
+      - name: apply + doctor
+        run: |
+          export PATH="$HOME/.local/bin:$HOME/.pi/agent/bin:$PATH"
+          node scripts/setup.mjs apply
+          node scripts/setup.mjs render | tee /tmp/render.log
+          grep -q ' 0 written, .* 0 drift, 0 missing' /tmp/render.log
+          pr-gate --help >/dev/null
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bootstrap -Tools
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 -Tools
+      - name: fake secrets
+        shell: pwsh
+        run: |
+          $dir = "$env:USERPROFILE\.config\pi-setup"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Get-Content secrets.env.example | Where-Object { $_ -match '^[A-Z]' } |
+            ForEach-Object { if ($_ -match 'HOST') { "${_}10.0.0.9" } else { "${_}fake-value" } } |
+            Set-Content "$dir\secrets.env"
+      - name: apply + doctor
+        shell: pwsh
+        run: |
+          $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User") + ";$env:USERPROFILE\.local\bin;$env:USERPROFILE\.pi\agent\bin"
+          node scripts/setup.mjs apply
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $r = node scripts/setup.mjs render
+          $r
+          if (-not ($r -match ' 0 written, .* 0 drift, 0 missing')) { exit 1 }
+          pr-gate.cmd --help
+          if ($LASTEXITCODE -ne 0) { exit 1 }
