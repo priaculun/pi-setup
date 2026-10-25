@@ -24,10 +24,14 @@ jobs:
       - name: shellcheck
         if: runner.os == 'Linux'
         run: shellcheck bootstrap.sh bin/pr-gate
-      - name: PowerShell parse
+      - name: PowerShell parse (5.1 + 7)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          # Windows PowerShell 5.1 reads BOM-less files as ANSI: non-ASCII bytes break parsing.
+          if (Select-String -Path bootstrap.ps1 -Pattern '[^\x00-\x7F]') { "bootstrap.ps1 must be ASCII-only"; exit 1 }
+          powershell -NoProfile -Command "`$e=`$null; [System.Management.Automation.Language.Parser]::ParseFile('$PWD\bootstrap.ps1',[ref]`$null,[ref]`$e) | Out-Null; if (`$e) { `$e; exit 1 }"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           $errors = $null
           [System.Management.Automation.Language.Parser]::ParseFile("$PWD/bootstrap.ps1", [ref]$null, [ref]$errors) | Out-Null
           if ($errors) { $errors; exit 1 }

@@ -1,4 +1,4 @@
-# bootstrap.ps1 — Windows 11: install prerequisites + tools, then apply the Pi setup.
+# bootstrap.ps1 - Windows 11: install prerequisites + tools, then apply the Pi setup.
 #
 #   powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1            # everything
 #   powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 -Tools     # tools only
@@ -87,7 +87,7 @@ if ($Tools) { Say "tools done"; exit 0 }
 
 gh auth status *> $null
 if ($LASTEXITCODE -ne 0) {
-  Warn "gh is not logged in — needed to pull secrets from the private repo."
+  Warn "gh is not logged in - needed to pull secrets from the private repo."
   gh auth login
 }
 
