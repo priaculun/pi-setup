@@ -70,7 +70,7 @@ node scripts/setup.mjs reset              # refuses while any pi process is runn
 
 ```sh
 node scripts/setup.mjs doctor           # must end with "0 error(s)"
-pi list                                 # 12 packages
+pi list                                 # 16 packages
 pi -p --no-session "say ok"             # model + key work
 ```
 

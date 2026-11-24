@@ -3,13 +3,17 @@
   "private": true,
   "dependencies": {
     "@ff-labs/pi-fff": "^0.11.0",
-    "@tintinweb/pi-subagents": "^0.22.0",
+    "@plannotator/pi-extension": "^0.29.3",
+    "@sveltejs/pi": "^0.1.0",
+    "@tintinweb/pi-subagents": "^0.26.3",
     "@tintinweb/pi-tasks": "^0.9.1",
+    "billion-context": "^0.1.216",
+    "pi-advisor-flow": "^0.17.0",
     "pi-ayu-themes": "^1.0.0",
     "pi-codebase-memory-mcp": "^0.1.2",
     "pi-quiet-tools": "^0.2.0",
-    "pi-schedule-prompt": "^0.4.1",
-    "pi-web-access": "^0.44.0",
+    "pi-schedule-prompt": "^0.5.1",
+    "pi-web-access": "^0.48.0",
     "remote-pi": "^0.7.0"
   },
   "scripts": {

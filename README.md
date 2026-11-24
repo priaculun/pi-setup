@@ -29,8 +29,8 @@ renders the config, installs every Pi package and runs `doctor`.
 |---|---|---|
 | Global agent rules | `home/pi-agent/AGENTS.md` | `~/.pi/agent/AGENTS.md` |
 | Settings + package list | `home/pi-agent/settings.json` | `~/.pi/agent/settings.json` (merged; local-only keys kept) |
-| Providers & models (8 providers) | `home/pi-agent/models.json.tmpl` | `~/.pi/agent/models.json` |
-| MCP servers (ontoken-media, hindsight) | `home/pi-agent/mcp.json.tmpl` | `~/.pi/agent/mcp.json` |
+| Provider & models (ontoken) | `home/pi-agent/models.json.tmpl` | `~/.pi/agent/models.json` |
+| MCP servers (ontoken-media, hindsight, BrowserOS, Svelte, Doop) | `home/pi-agent/mcp.json.tmpl` | `~/.pi/agent/mcp.json` |
 | Subagent overrides | `home/pi-agent/agents/` | `~/.pi/agent/agents/` |
 | Skills (hindsight-memory, parallel-pr) | `home/pi-agent/skills/` | `~/.pi/agent/skills/` |
 | merge-guard extension | `home/pi-agent/extensions/merge-guard.ts` | `~/.pi/agent/extensions/` |
@@ -43,8 +43,9 @@ renders the config, installs every Pi package and runs `doctor`.
 
 Packages (installed by `pi update --extensions` from `settings.json`):
 pi-quiet-tools, pi-codebase-memory-mcp, remote-pi, pi-web-access, pi-ayu-themes, pi-schedule-prompt,
-@tintinweb/pi-tasks, @tintinweb/pi-subagents, @ff-labs/pi-fff, and the git packages
-[self-compact](https://github.com/priaculun/self-compact), [ontoken-auto](https://github.com/priaculun/ontoken-auto),
+@tintinweb/pi-tasks, @tintinweb/pi-subagents, @ff-labs/pi-fff, `anti-slop`, `@sveltejs/pi`,
+`@plannotator/pi-extension`, `pi-advisor-flow`, `billion-context`, and the git packages
+[ontoken-auto](https://github.com/priaculun/ontoken-auto),
 [pc-better-custom](https://github.com/priaculun/pc-better-custom).
 
 Tools: Node ≥ 22.19, git, gh, jq, Pi, [herdr](https://herdr.dev), [tsk](https://gettsk.sh),
