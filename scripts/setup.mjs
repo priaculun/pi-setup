@@ -36,7 +36,7 @@ function paths() {
 		home,
 		agent,
 		remote: path.join(home, ".pi", "remote"),
-		herdr: IS_WIN ? path.join(appData, "herdr") : path.join(home, ".config", "herdr"),
+		herdrCore: IS_WIN ? path.join(appData, "herdr-core") : path.join(home, ".config", "herdr-core"),
 		bin: path.join(home, ".local", "bin"),
 		cfg,
 		state: path.join(cfg, "state.json"),
@@ -57,15 +57,15 @@ function mappings(P = paths()) {
 			dirs: ["agents", "skills", "extensions", "prompts", "themes"],
 		},
 		{ repo: "home/pi-remote", live: P.remote, files: ["config.json"], dirs: [] },
-		{ repo: "home/herdr", live: P.herdr, files: ["config.toml"], dirs: [] },
+		// hc = herdr-core: its config and its role templates (worker/reviewer/planner).
+		{ repo: "home/herdr-core", live: P.herdrCore, files: ["config.toml"], dirs: ["templates"] },
 		{ repo: "bin", live: P.bin, files: ["pr-gate"], dirs: [], exec: true },
 	];
 }
 
 /** Live files installed/managed by other tools — never captured. */
 const IGNORE = [
-	/^extensions\/herdr-agent-state\.ts$/, // `herdr integration install pi`
-	/^skills\/tsk-cli(\/|$)/, // `tsk setup pi`
+	/^skills\/tsk-cli(\/|$)/, // written by the `tsk` CLI (no longer installed)
 	/(^|\/)\.DS_Store$/,
 	/\.bak(-\d+)?$/,
 	/(^|\/)node_modules(\/|$)/,
@@ -299,14 +299,9 @@ function apply() {
 		log.info("no secrets.env yet — trying `secrets pull`");
 		secretsPull({ quiet: true });
 	}
-	// Fresh machine: let tsk register its herdr plugin + shortcuts BEFORE our herdr config exists,
-	// otherwise tsk refuses non-interactively ("prefix+t is already assigned"). render then adopts the file.
-	let tskHerdrDone = false;
-	if (!flag("--dry-run") && !flag("--no-post") && has("tsk") && has("herdr") && !fs.existsSync(path.join(P.herdr, "config.toml"))) {
-		const x = run("tsk", ["setup", "herdr"]);
-		tskHerdrDone = x.code === 0;
-		tskHerdrDone ? log.ok("tsk -> herdr plugin") : log.warn(`tsk -> herdr plugin failed: ${(x.err || x.out).split("\n")[0]}`);
-	}
+	// Fresh machine: link `pi` where hc's core can find it BEFORE any terminal is spawned. The core
+	// starts programs with its own PATH (no ~/.bun/bin), so `hc run … pi` fails without this.
+	if (!flag("--dry-run") && !flag("--no-post")) linkPi();
 	const r = render();
 	if (flag("--dry-run")) return;
 
@@ -327,9 +322,7 @@ function apply() {
 			const x = run(cmd, args);
 			x.code === 0 ? log.ok(name) : log.warn(`${name} failed: ${(x.err || x.out).split("\n")[0]}`);
 		};
-		step("herdr integration (pi)", has("herdr"), "herdr", ["integration", "install", "pi"]);
-		if (!tskHerdrDone) step("tsk -> herdr plugin", has("tsk"), "tsk", ["setup", "herdr"]);
-		step("tsk -> pi skill", has("tsk"), "tsk", ["setup", "pi"]);
+		step("hc (herdr-core)", has("hc"), "hc", ["--version"]);
 		const cbm = has("codebase-memory-mcp") ? "codebase-memory-mcp" : path.join(P.bin, "codebase-memory-mcp");
 		for (const [k, v] of Object.entries(CBM_CONFIG)) step(`cbm config ${k}=${v}`, has("codebase-memory-mcp") || fs.existsSync(cbm), cbm, ["config", "set", k, v]);
 	}
@@ -337,6 +330,40 @@ function apply() {
 	doctor();
 }
 const CBM_CONFIG = { auto_index: "true", auto_watch: "true", ui_enabled: "false" };
+
+/**
+ * `pi` on the PATH that hc's core uses. The core inherits the login environment, which on macOS
+ * does not include ~/.bun/bin (bun) or ~/.pi/agent/bin (the official installer), so an interactive
+ * agent started with `hc run … pi` dies with spawn_failed. A link in ~/.local/bin (always first on
+ * that PATH) fixes it for both installers.
+ */
+function linkPi() {
+	const P = paths();
+	const dst = path.join(P.bin, IS_WIN ? "pi.cmd" : "pi");
+	const onPath = run(IS_WIN ? "where" : "sh", IS_WIN ? ["pi"] : ["-c", "command -v pi"]);
+	if (onPath.code !== 0) return log.warn("`pi` not on PATH — hc templates cannot start an agent (install Pi first)");
+	const src = onPath.out.split(/\r?\n/)[0].trim();
+	if (path.dirname(src) === P.bin) return; // already reachable where hc looks
+	if (IS_WIN) {
+		const body = `@echo off\r\n"${src}" %*\r\n`;
+		if (fs.existsSync(dst) && fs.readFileSync(dst, "utf8") === body) return;
+		writeFile(dst, body);
+		return log.ok(`linked ${rel(path.relative(P.home, dst))} -> ${src} (hc needs pi on its PATH)`);
+	}
+	const cur = fs.existsSync(dst) || isLink(dst) ? fs.readlinkSync(dst) : null;
+	if (cur === src) return;
+	fs.mkdirSync(P.bin, { recursive: true });
+	if (cur !== null) fs.rmSync(dst, { force: true });
+	fs.symlinkSync(src, dst);
+	log.ok(`linked ${rel(path.relative(P.home, dst))} -> ${src} (hc needs pi on its PATH)`);
+}
+const isLink = (p) => {
+	try {
+		return fs.lstatSync(p).isSymbolicLink();
+	} catch {
+		return false;
+	}
+};
 
 // ---------------------------------------------------------------- doctor
 function versionOf(cmd, args = ["--version"]) {
@@ -363,7 +390,7 @@ function doctor() {
 	add(gte(node, "22.19.0") ? "ok" : "error", "tool", "node", `${node} (need >= 22.19.0)`);
 	const tools = [
 		["pi", true], ["git", true], ["gh", true], ["jq", true],
-		["herdr", false], ["tsk", false], ["codebase-memory-mcp", false],
+		["hc", false], ["codebase-memory-mcp", false],
 	];
 	for (const [t, required] of tools) {
 		const v = versionOf(t === "codebase-memory-mcp" && !has(t) ? path.join(P.bin, t) : t);
@@ -408,9 +435,17 @@ function doctor() {
 	for (const entry of settings.packages ?? []) if (packageSource(entry) && !repoSources.has(packageSource(entry))) add("warn", "package", packageSource(entry), "installed locally but not in repo — run capture");
 	for (const entry of repoPkgs) if (packageSource(entry) && !localSources.has(packageSource(entry))) add("warn", "package", packageSource(entry), "in repo but not in local settings — run apply");
 
-	// tool-managed resources
-	add(fs.existsSync(path.join(P.agent, "extensions", "herdr-agent-state.ts")) ? "ok" : "warn", "integration", "herdr -> pi", "herdr integration install pi");
-	add(fs.existsSync(path.join(P.agent, "skills", "tsk-cli", "SKILL.md")) ? "ok" : "warn", "integration", "tsk skill", "tsk setup pi");
+	// tool-managed resources: hc reads the roles we ship and Pi reports its status to it over OSC 7501.
+	const tplRepo = walk(path.join(REPO, "home/herdr-core/templates")).filter((f) => f.endsWith(".md")).length;
+	if (!has("hc")) add("warn", "integration", "hc templates", "hc not installed — ./bootstrap.sh");
+	else {
+		const t = run("hc", ["templates"]);
+		let n = null;
+		try {
+			n = JSON.parse(t.out).templates.length;
+		} catch {}
+		add(n === null || n < tplRepo ? "warn" : "ok", "integration", "hc templates", n === null ? "cannot read `hc templates`" : `${n} available, repo has ${tplRepo} — hc run <name> \"task\"`);
+	}
 
 	if (flag("--json")) console.log(JSON.stringify(rows, null, 2));
 	else {
@@ -456,7 +491,7 @@ function buildLock(P) {
 		packages[src] = d && fs.existsSync(d) ? packageVersion(d, entry) : "not-installed";
 	}
 	const tools = {};
-	for (const t of ["pi", "herdr", "tsk", "codebase-memory-mcp", "gh"]) {
+	for (const t of ["pi", "hc", "codebase-memory-mcp", "gh"]) {
 		const v = versionOf(t === "codebase-memory-mcp" && !has(t) ? path.join(P.bin, t) : t);
 		if (v) tools[t] = v;
 	}
@@ -779,8 +814,8 @@ function reset({ dry = flag("--dry-run"), yes = flag("--yes") } = {}) {
 			moves.push([path.join(P.agent, e), path.join(backup, "agent", e)]);
 		}
 	}
-	const herdrCfg = path.join(P.herdr, "config.toml");
-	if (fs.existsSync(herdrCfg)) moves.push([herdrCfg, path.join(backup, "herdr", "config.toml")]);
+	const hcCfg = path.join(P.herdrCore, "config.toml");
+	if (fs.existsSync(hcCfg)) moves.push([hcCfg, path.join(backup, "herdr-core", "config.toml")]);
 
 	log.info(`${dry ? "[dry-run] " : ""}backup -> ${backup}`);
 	if (keep.length) log.info(`keep  ${keep.map((e) => path.join(P.agent, e)).join(", ")} (Pi install)`);
@@ -797,7 +832,7 @@ function reset({ dry = flag("--dry-run"), yes = flag("--yes") } = {}) {
 	if (moves.length) {
 		writeFile(path.join(backup, "README.txt"),
 			`pi-setup reset backup (${new Date().toISOString()})\n` +
-			`agent/  = old ${P.agent}\nherdr/  = old ${P.herdr}\n` +
+			`agent/  = old ${P.agent}\nherdr-core/  = old ${P.herdrCore}\n` +
 			`Restore sessions: copy agent/sessions back into ${P.agent}/sessions\n`);
 		log.ok(`reset done: ${moves.length} item(s) moved to ${backup}`);
 	} else log.ok("reset: nothing to move");
@@ -861,6 +896,19 @@ function selftest() {
 	if (mcp.text.includes("hs-local") || !mcp.text.includes("Bearer ${MCP_A_TOKEN}")) [fail] = [fail + 1, log.err("mcp redaction failed")];
 	// package entries may be objects (e.g. remote-pi with a filtered extension)
 	if (packageSource("npm:x") !== "npm:x" || packageSource({ source: "npm:y", extensions: ["-dist/index.js"] }) !== "npm:y" || packageSource({}) !== null) [fail] = [fail + 1, log.err("package entry normalization failed")];
+	// hc role templates ship in the repo: they must render with a usable command, or `hc run <name>` breaks
+	const tplDir = path.join(P.herdrCore, "templates");
+	for (const name of ["worker", "reviewer", "planner"]) {
+		const t = fs.existsSync(path.join(tplDir, `${name}.md`)) ? fs.readFileSync(path.join(tplDir, `${name}.md`), "utf8") : "";
+		const cmd = t.match(/^command:\s*(.+)$/m)?.[1] ?? "";
+		if (!cmd.startsWith("pi ") || !cmd.includes("--model ")) [fail] = [fail + 1, log.err(`hc template ${name}: needs a \`command: pi --model <provider/model>\``)];
+		if (!/^---\n[\s\S]*?\n---\n/.test(t)) [fail] = [fail + 1, log.err(`hc template ${name}: frontmatter missing`)];
+	}
+	// `pi` must be reachable where hc's core looks (~/.local/bin is first on its PATH)
+	if (has("pi")) {
+		linkPi();
+		if (!isLink(path.join(P.bin, "pi")) && !fs.existsSync(path.join(P.bin, "pi"))) [fail] = [fail + 1, log.err("linkPi did not link pi into ~/.local/bin")];
+	}
 	// models.json: providers kept local to this machine survive render/apply
 	const models = path.join(P.agent, "models.json");
 	const before = readJSON(models, {}).providers ?? {};
@@ -887,7 +935,7 @@ function selftest() {
 	const leftover = fs.existsSync(P.agent) ? fs.readdirSync(P.agent).sort() : [];
 	if (leftover.join() !== "bin,install") [fail] = [fail + 1, log.err(`reset left: ${leftover.join(", ")}`)];
 	if (!fs.existsSync(path.join(rs.backup, "agent", "sessions", "s1.jsonl"))) [fail] = [fail + 1, log.err("reset lost sessions")];
-	if (!fs.existsSync(path.join(rs.backup, "herdr", "config.toml"))) [fail] = [fail + 1, log.err("reset missed herdr config")];
+	if (!fs.existsSync(path.join(rs.backup, "herdr-core", "config.toml"))) [fail] = [fail + 1, log.err("reset missed herdr-core config")];
 	if (!fs.existsSync(path.join(P.remote, "peers.json")) || !fs.existsSync(P.secrets) || fs.existsSync(P.state)) [fail] = [fail + 1, log.err("reset touched remote/secrets or kept state")];
 	const r3 = render({ force: false, dry: false });
 	if (r3.drift.length || r3.missing.size || !fs.existsSync(path.join(P.agent, "models.json"))) [fail] = [fail + 1, log.err("render after reset failed")];

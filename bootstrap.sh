@@ -51,7 +51,7 @@ node_ok() {
 # ---------------------------------------------------------------- check mode
 if [ "$MODE" = "check" ]; then
   say "platform: $OS ($PM)"
-  for t in git curl jq gh node pi herdr tsk codebase-memory-mcp; do
+  for t in git curl jq gh node pi hc codebase-memory-mcp; do
     if have "$t"; then printf '  ok       %s\n' "$t"; else printf '  missing  %s\n' "$t"; fi
   done
   node_ok || echo "  node >= 22.19 required"
@@ -115,14 +115,11 @@ if ! have pi; then
   have pi || die "pi not on PATH after install — open a new shell and re-run"
 fi
 
-if ! have herdr; then
-  say "install herdr"
-  if [ "$PM" = "brew" ]; then brew install herdr; else curl -fsSL https://herdr.dev/install.sh | sh; fi
-fi
-
-if ! have tsk; then
-  say "install tsk"
-  if [ "$PM" = "brew" ]; then brew install smarzban/tap/tsk; else curl -fsSL https://gettsk.sh/install.sh | sh; fi
+if ! have hc; then
+  say "install hc (herdr-core)"
+  curl -fsSL https://releases.herdr.dev/core/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+  have hc || die "hc not on PATH after install — open a new shell and re-run"
 fi
 
 if ! have codebase-memory-mcp; then
@@ -132,8 +129,14 @@ fi
 
 case ":$PATH:" in
   *":$HOME/.local/bin:"*) ;;
-  *) warn "add ~/.local/bin to PATH in your shell profile (pr-gate, codebase-memory-mcp live there)" ;;
+  *) warn "add ~/.local/bin to PATH in your shell profile (pr-gate, codebase-memory-mcp, hc live there)" ;;
 esac
+
+# hc starts programs with the core's own PATH, which has no ~/.bun/bin: without this link
+# `hc run … pi` dies with spawn_failed. `apply` re-creates it (and reports it), this is the early copy.
+if have pi && [ ! -e "$HOME/.local/bin/pi" ]; then
+  ln -sf "$(command -v pi)" "$HOME/.local/bin/pi" && say "linked ~/.local/bin/pi -> $(command -v pi)"
+fi
 
 [ "$MODE" = "tools" ] && { say "tools done"; exit 0; }
 

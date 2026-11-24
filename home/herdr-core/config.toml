@@ -1,0 +1,13 @@
+# herdr-core (`hc`) settings — Windows: %APPDATA%\herdr-core\config.toml
+# Every key is optional; the core falls back to its default when one is missing.
+# `hc --help` lists the keys, `hc --skill` is the manual agents follow.
+
+# hc types its own notes (the <hc from="…"> reports and delivery tags) into terminals.
+notes = true
+
+# Seconds a half-written draft holds a send/note after the person's last key.
+# 0 keeps only the quiet pause. Applies to the next delivery, no restart needed.
+draft_wait = 5
+
+# Seconds `hc wait` blocks before returning a check-in (reason: timeout).
+wait_timeout = 180

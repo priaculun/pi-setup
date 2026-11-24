@@ -203,9 +203,13 @@ run_checks() {
 	fi
 }
 
-notify() { # best-effort desktop/herdr notification
-	if [ "${HERDR_ENV:-}" = 1 ] && command -v herdr >/dev/null 2>&1; then
-		herdr notification show "$1" --body "$2" --sound "done" >/dev/null 2>&1 || true
+notify() { # best-effort notification: hc terminal (agent reports), else macOS/desktop
+	if [ -n "${HC_TERMINAL_ID:-}" ] && command -v hc >/dev/null 2>&1; then
+		hc send "$HC_TERMINAL_ID" "$1 — $2" >/dev/null 2>&1 || true
+	elif [ "$(uname -s)" = Darwin ] && command -v osascript >/dev/null 2>&1; then
+		osascript -e "display notification \"$2\" with title \"$1\"" >/dev/null 2>&1 || true
+	elif command -v notify-send >/dev/null 2>&1; then
+		notify-send "$1" "$2" >/dev/null 2>&1 || true
 	fi
 }
 
