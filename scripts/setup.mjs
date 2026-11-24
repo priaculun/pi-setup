@@ -364,11 +364,16 @@ function linkPi() {
 		// put its directory on the user PATH for hc's core instead (same as bootstrap.ps1).
 		if (/[^\x00-\x7F]/.test(src)) {
 			const dir = path.dirname(src);
-			const r = run("powershell", [
-				"-NoProfile",
-				"-Command",
-				`$p=[Environment]::GetEnvironmentVariable('Path','User'); if ($p -notlike '*${dir}*') { [Environment]::SetEnvironmentVariable('Path', \"$p;${dir}\", 'User') }`,
-			]);
+			// pass the directory as data: interpolating it into PowerShell source breaks on `'` and expands `$`.
+			const r = run(
+				"powershell",
+				[
+					"-NoProfile",
+					"-Command",
+					"$p=[Environment]::GetEnvironmentVariable('Path','User'); if ($p -notlike \"*$env:PI_LINK_DIR*\") { [Environment]::SetEnvironmentVariable('Path', \"$p;$env:PI_LINK_DIR\", 'User') }",
+				],
+				{ env: { ...process.env, PI_LINK_DIR: dir } },
+			);
 			if (r.code === 0) log.ok(`${src} is not ASCII — added ${dir} to the user PATH for hc`);
 			else log.warn(`${src} is not ASCII and the PATH update failed — add ${dir} to PATH by hand`);
 			return r.code === 0 ? "path" : null;
