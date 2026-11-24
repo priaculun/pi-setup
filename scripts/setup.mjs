@@ -177,6 +177,8 @@ function plan(P = paths()) {
 				dst: path.join(m.live, liveRel),
 				tmpl,
 				merge: m.repo === "home/pi-agent" && liveRel === "settings.json",
+				// models.json: repo providers win, providers kept local to this machine survive a render.
+				mergeProviders: m.repo === "home/pi-agent" && liveRel === "models.json",
 				sensitive: tmpl && SENSITIVE.has(path.basename(liveRel)),
 				exec: Boolean(m.exec),
 			});
@@ -197,6 +199,14 @@ function desired(item, vars) {
 		return { text: `${JSON.stringify(next, null, 2)}\n`, view: managed(next), curView: fs.existsSync(item.dst) ? managed(cur) : null, missing: [] };
 	}
 	const { out, missing } = item.tmpl ? renderTemplate(raw, vars) : { out: raw, missing: [] };
+	if (item.mergeProviders && !missing.length) {
+		const repo = JSON.parse(out);
+		const cur = readJSON(item.dst, {});
+		const next = { ...cur, ...repo, providers: { ...(cur.providers ?? {}), ...(repo.providers ?? {}) } };
+		// Only the providers the repo manages are compared, so local-only ones are not drift.
+		const managed = (o) => JSON.stringify(Object.fromEntries(Object.keys(repo.providers ?? {}).map((k) => [k, o.providers?.[k]])));
+		return { text: `${JSON.stringify(next, null, 2)}\n`, view: managed(next), curView: fs.existsSync(item.dst) ? managed(cur) : null, missing: [] };
+	}
 	const cur = fs.existsSync(item.dst) ? fs.readFileSync(item.dst, "utf8") : null;
 	// Compare ignoring trailing whitespace / CRLF so editor newline habits are not "drift".
 	const norm = (s) => (s === null ? null : s.replace(/\r\n/g, "\n").replace(/\s*$/, "\n"));
@@ -851,6 +861,20 @@ function selftest() {
 	if (mcp.text.includes("hs-local") || !mcp.text.includes("Bearer ${MCP_A_TOKEN}")) [fail] = [fail + 1, log.err("mcp redaction failed")];
 	// package entries may be objects (e.g. remote-pi with a filtered extension)
 	if (packageSource("npm:x") !== "npm:x" || packageSource({ source: "npm:y", extensions: ["-dist/index.js"] }) !== "npm:y" || packageSource({}) !== null) [fail] = [fail + 1, log.err("package entry normalization failed")];
+	// models.json: providers kept local to this machine survive render/apply
+	const models = path.join(P.agent, "models.json");
+	const before = readJSON(models, {}).providers ?? {};
+	const localOnly = Object.keys(before).filter((k) => !captureProviders().has("*") && !captureProviders().has(k));
+	const savedProviders = Object.fromEntries(localOnly.map((k) => [k, before[k]]));
+	fs.writeFileSync(models, JSON.stringify({ ...readJSON(models, {}), providers: { local: { apiKey: "sk-localonly0000000000000000" }, ontoken: {} } }));
+	const stm = readJSON(P.state, { files: {} });
+	delete stm.files[models];
+	writeFile(P.state, JSON.stringify(stm));
+	const r4 = render();
+	const after = readJSON(models, {}).providers ?? {};
+	if (r4.drift.includes(".pi/agent/models.json") || !("local" in after) || !("ontoken" in after)) [fail] = [fail + 1, log.err("render dropped a local-only provider")];
+	if (render().written !== 0 || !("local" in (readJSON(models, {}).providers ?? {}))) [fail] = [fail + 1, log.err("merge render is not idempotent")];
+	fs.writeFileSync(models, JSON.stringify({ ...readJSON(models, {}), providers: { ...after, ...savedProviders } }));
 	// reset: everything moves to the backup, remote + secrets stay, re-render works from scratch
 	writeSecrets(P.secrets, fake);
 	writeFile(path.join(P.agent, "sessions", "s1.jsonl"), "{}\n");

@@ -77,8 +77,9 @@ last wrote). It reports `drift` instead; `--force` overwrites and keeps a `.bak-
 `capture` copies only the providers listed in `PI_CAPTURE_PROVIDERS` (default `ontoken`) into
 `models.json.tmpl`; every other provider stays local and is reported as `providers kept local`.
 Use `PI_CAPTURE_PROVIDERS="ontoken,alfarouter"` to widen it, or `*` to capture all of them.
-On a machine that keeps extra local providers, never `apply --force` (it replaces `models.json`
-wholesale) — plain `apply` leaves the file alone and reports drift instead.
+`render`/`apply` merge providers by name, so a plain `apply` on such a machine updates the
+repo-managed providers and leaves the local-only ones untouched (`--force` also keeps them).
+To drop them, delete the provider from the live `models.json` by hand.
 
 ## Maintaining
 

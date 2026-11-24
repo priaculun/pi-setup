@@ -12,6 +12,8 @@ Follow the steps in order. Do not improvise around failures; report them.
 - Ask the user before: `reset`, `apply --force`, `capture --prune`, `secrets push`, installing extra system packages.
 - `capture` only copies the providers in `PI_CAPTURE_PROVIDERS` (default `ontoken`); other providers
   stay local to the machine. Widen it explicitly, never by habit.
+- `models.json` is merged by provider name on render, so local-only providers survive `apply`.
+  Do not hand-edit the template to add one — widen `PI_CAPTURE_PROVIDERS` instead.
 - Files written by other tools are **not** managed here (do not copy them in):
   `extensions/herdr-agent-state.ts` (herdr), `skills/tsk-cli` (tsk), `~/.pi/remote/skills/agent-network` (remote-pi).
 
