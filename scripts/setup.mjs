@@ -71,7 +71,7 @@ const IGNORE = [
 	/(^|\/)node_modules(\/|$)/,
 ];
 /** settings.json keys Pi rewrites on its own. */
-const VOLATILE_SETTINGS = ["lastChangelogVersion"];
+const VOLATILE_SETTINGS = ["lastChangelogVersion", "extensionChangelogVersions"];
 /** Files that hold credentials once rendered -> chmod 600. */
 const SENSITIVE = new Set(["models.json", "mcp.json", "web-search.json", "config.json"]);
 
@@ -384,15 +384,19 @@ function doctor() {
 
 	// packages
 	const settings = readJSON(path.join(P.agent, "settings.json"), {});
-	for (const src of settings.packages ?? []) {
-		const loc = packageDir(P, src);
-		const v = loc && fs.existsSync(loc) ? packageVersion(loc, src) : null;
-		const want = lock.packages?.[src];
-		add(v ? (want && want !== v ? "info" : "ok") : "error", "package", src, v ? `${v}${want && want !== v ? ` (lock ${want})` : ""}` : "not installed — run `pi update --extensions`");
+	for (const entry of settings.packages ?? []) {
+		const src = packageSource(entry);
+		const loc = packageDir(P, entry);
+		const v = loc && fs.existsSync(loc) ? packageVersion(loc, entry) : null;
+		const want = src && lock.packages?.[src];
+		const label = src ?? JSON.stringify(entry);
+		add(v ? (want && want !== v ? "info" : "ok") : "error", "package", label, v ? `${v}${want && want !== v ? ` (lock ${want})` : ""}` : "not installed — run `pi update --extensions`");
 	}
 	const repoPkgs = readJSON(path.join(REPO, "home/pi-agent/settings.json"), {}).packages ?? [];
-	for (const s of (settings.packages ?? []).filter((s) => !repoPkgs.includes(s))) add("warn", "package", s, "installed locally but not in repo — run capture");
-	for (const s of repoPkgs.filter((s) => !(settings.packages ?? []).includes(s))) add("warn", "package", s, "in repo but not in local settings — run apply");
+	const localSources = new Set((settings.packages ?? []).map(packageSource).filter(Boolean));
+	const repoSources = new Set(repoPkgs.map(packageSource).filter(Boolean));
+	for (const entry of settings.packages ?? []) if (packageSource(entry) && !repoSources.has(packageSource(entry))) add("warn", "package", packageSource(entry), "installed locally but not in repo — run capture");
+	for (const entry of repoPkgs) if (packageSource(entry) && !localSources.has(packageSource(entry))) add("warn", "package", packageSource(entry), "in repo but not in local settings — run apply");
 
 	// tool-managed resources
 	add(fs.existsSync(path.join(P.agent, "extensions", "herdr-agent-state.ts")) ? "ok" : "warn", "integration", "herdr -> pi", "herdr integration install pi");
@@ -410,7 +414,13 @@ function doctor() {
 }
 
 // ---------------------------------------------------------------- packages / lock
-function packageDir(P, src) {
+/** Pi accepts either a package source string or an object with a `source` field. */
+function packageSource(entry) {
+	return typeof entry === "string" ? entry : entry && typeof entry.source === "string" ? entry.source : null;
+}
+function packageDir(P, entry) {
+	const src = packageSource(entry);
+	if (!src) return null;
 	if (src.startsWith("npm:")) {
 		const name = src.slice(4).replace(/(?<=.)@[^/]*$/, ""); // strip @version
 		return path.join(P.agent, "npm", "node_modules", ...name.split("/"));
@@ -418,7 +428,9 @@ function packageDir(P, src) {
 	const m = src.replace(/^git:/, "https://").match(/^https?:\/\/([^/]+)\/([^/]+)\/([^/@#]+?)(?:\.git)?(?:[@#].*)?$/);
 	return m ? path.join(P.agent, "git", m[1], m[2], m[3]) : null;
 }
-function packageVersion(dir, src) {
+function packageVersion(dir, entry) {
+	const src = packageSource(entry);
+	if (!src) return null;
 	if (src.startsWith("npm:")) return readJSON(path.join(dir, "package.json"), {}).version ?? "?";
 	const r = run("git", ["-C", dir, "rev-parse", "--short", "HEAD"]);
 	const v = readJSON(path.join(dir, "package.json"), {}).version;
@@ -427,9 +439,11 @@ function packageVersion(dir, src) {
 function buildLock(P) {
 	const settings = readJSON(path.join(P.agent, "settings.json"), {});
 	const packages = {};
-	for (const s of settings.packages ?? []) {
-		const d = packageDir(P, s);
-		packages[s] = d && fs.existsSync(d) ? packageVersion(d, s) : "not-installed";
+	for (const entry of settings.packages ?? []) {
+		const src = packageSource(entry);
+		if (!src) continue;
+		const d = packageDir(P, entry);
+		packages[src] = d && fs.existsSync(d) ? packageVersion(d, entry) : "not-installed";
 	}
 	const tools = {};
 	for (const t of ["pi", "herdr", "tsk", "codebase-memory-mcp", "gh"]) {
@@ -811,6 +825,8 @@ function selftest() {
 	if (red.text.includes("sk-abc") || red.text.includes("100.100") || red.found.PI_KEY_X_Y !== "sk-abcdefghijklmnopqrstuvwxyz" || red.found.PI_HOST_X_Y !== "100.100.1.2") [fail] = [fail + 1, log.err("redaction failed")];
 	const mcp = redact("mcp.json", JSON.stringify({ mcpServers: { a: { url: "https://x.dev/mcp", headers: { Authorization: "Bearer hs-local-zzz" } } } }));
 	if (mcp.text.includes("hs-local") || !mcp.text.includes("Bearer ${MCP_A_TOKEN}")) [fail] = [fail + 1, log.err("mcp redaction failed")];
+	// package entries may be objects (e.g. remote-pi with a filtered extension)
+	if (packageSource("npm:x") !== "npm:x" || packageSource({ source: "npm:y", extensions: ["-dist/index.js"] }) !== "npm:y" || packageSource({}) !== null) [fail] = [fail + 1, log.err("package entry normalization failed")];
 	// reset: everything moves to the backup, remote + secrets stay, re-render works from scratch
 	writeSecrets(P.secrets, fake);
 	writeFile(path.join(P.agent, "sessions", "s1.jsonl"), "{}\n");
