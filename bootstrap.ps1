@@ -79,7 +79,7 @@ if ($userPath -notlike "*$localBin*") {
 Refresh-Path
 
 # hc starts programs with the core's own PATH: give it a `pi.cmd` next to pr-gate so
-# `hc run … pi` resolves. apply re-creates this too.
+# `hc run ... pi` resolves. apply re-creates this too.
 if (Have pi) {
   $piCmd = (Get-Command pi).Source
   if ((Split-Path $piCmd) -ne $localBin) {

@@ -350,8 +350,9 @@ function linkPi() {
 		writeFile(dst, body);
 		return log.ok(`linked ${rel(path.relative(P.home, dst))} -> ${src} (hc needs pi on its PATH)`);
 	}
-	const cur = fs.existsSync(dst) || isLink(dst) ? fs.readlinkSync(dst) : null;
+	const cur = isLink(dst) ? fs.readlinkSync(dst) : null;
 	if (cur === src) return;
+	if (cur === null && fs.existsSync(dst)) return log.warn(`${rel(path.relative(P.home, dst))} is a real file, not our link — leaving it alone`);
 	fs.mkdirSync(P.bin, { recursive: true });
 	if (cur !== null) fs.rmSync(dst, { force: true });
 	fs.symlinkSync(src, dst);
@@ -907,7 +908,7 @@ function selftest() {
 	// `pi` must be reachable where hc's core looks (~/.local/bin is first on its PATH)
 	if (has("pi")) {
 		linkPi();
-		if (!isLink(path.join(P.bin, "pi")) && !fs.existsSync(path.join(P.bin, "pi"))) [fail] = [fail + 1, log.err("linkPi did not link pi into ~/.local/bin")];
+		if (!isLink(path.join(P.bin, IS_WIN ? "pi.cmd" : "pi")) && !fs.existsSync(path.join(P.bin, IS_WIN ? "pi.cmd" : "pi"))) [fail] = [fail + 1, log.err("linkPi did not link pi into ~/.local/bin")];
 	}
 	// models.json: providers kept local to this machine survive render/apply
 	const models = path.join(P.agent, "models.json");

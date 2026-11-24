@@ -207,7 +207,12 @@ notify() { # best-effort notification: hc terminal (agent reports), else macOS/d
 	if [ -n "${HC_TERMINAL_ID:-}" ] && command -v hc >/dev/null 2>&1; then
 		hc send "$HC_TERMINAL_ID" "$1 — $2" >/dev/null 2>&1 || true
 	elif [ "$(uname -s)" = Darwin ] && command -v osascript >/dev/null 2>&1; then
-		osascript -e "display notification \"$2\" with title \"$1\"" >/dev/null 2>&1 || true
+		# argv, not string concatenation: a PR title is attacker-adjacent text, not AppleScript source.
+		osascript - "$1" "$2" >/dev/null 2>&1 <<-'APPLESCRIPT' || true
+			on run argv
+				display notification (item 2 of argv) with title (item 1 of argv)
+			end run
+		APPLESCRIPT
 	elif command -v notify-send >/dev/null 2>&1; then
 		notify-send "$1" "$2" >/dev/null 2>&1 || true
 	fi
