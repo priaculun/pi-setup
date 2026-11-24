@@ -338,31 +338,58 @@ const CBM_CONFIG = { auto_index: "true", auto_watch: "true", ui_enabled: "false"
  * agent started with `hc run … pi` dies with spawn_failed. A link in ~/.local/bin (always first on
  * that PATH) fixes it for both installers.
  */
+/**
+ * Returns how `pi` became reachable for hc: "present" (already in ~/.local/bin),
+ * "linked" (symlink / pi.cmd written), "path" (directory added to the user PATH
+ * because a Windows shim cannot carry a non-ASCII path), or null (not resolvable).
+ */
 function linkPi() {
 	const P = paths();
 	const dst = path.join(P.bin, IS_WIN ? "pi.cmd" : "pi");
 	const onPath = run(IS_WIN ? "where" : "sh", IS_WIN ? ["pi"] : ["-c", "command -v pi"]);
-	if (onPath.code !== 0) return log.warn("`pi` not on PATH — hc templates cannot start an agent (install Pi first)");
+	if (onPath.code !== 0) {
+		log.warn("`pi` not on PATH — hc templates cannot start an agent (install Pi first)");
+		return null;
+	}
 	// `where` can list an extension-less npm shim first; a .cmd that calls it would fail.
 	const lines = onPath.out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 	const src = (IS_WIN ? lines.find((l) => /\.(cmd|exe)$/i.test(l)) : lines[0]) ?? lines[0];
-	if (!src) return log.warn("could not resolve `pi` on PATH — hc templates cannot start an agent");
-	if (path.dirname(src) === P.bin) return; // already reachable where hc looks
+	if (!src) {
+		log.warn("could not resolve `pi` on PATH — hc templates cannot start an agent");
+		return null;
+	}
+	if (path.dirname(src) === P.bin) return "present"; // already reachable where hc looks
 	if (IS_WIN) {
-		// cmd.exe reads a .cmd in the OEM code page, so a non-ASCII path cannot be embedded.
-		if (/[^\x00-\x7F]/.test(src)) return log.warn(`${src} is not ASCII — add ${path.dirname(src)} to PATH for hc instead of a pi.cmd shim`);
+		// cmd.exe reads a .cmd in the OEM code page, so a non-ASCII path cannot be embedded;
+		// put its directory on the user PATH for hc's core instead (same as bootstrap.ps1).
+		if (/[^\x00-\x7F]/.test(src)) {
+			const dir = path.dirname(src);
+			const r = run("powershell", [
+				"-NoProfile",
+				"-Command",
+				`$p=[Environment]::GetEnvironmentVariable('Path','User'); if ($p -notlike '*${dir}*') { [Environment]::SetEnvironmentVariable('Path', \"$p;${dir}\", 'User') }`,
+			]);
+			if (r.code === 0) log.ok(`${src} is not ASCII — added ${dir} to the user PATH for hc`);
+			else log.warn(`${src} is not ASCII and the PATH update failed — add ${dir} to PATH by hand`);
+			return r.code === 0 ? "path" : null;
+		}
 		const body = `@echo off\r\n"${src}" %*\r\n`;
-		if (fs.existsSync(dst) && fs.readFileSync(dst, "utf8") === body) return;
+		if (fs.existsSync(dst) && fs.readFileSync(dst, "utf8") === body) return "linked";
 		writeFile(dst, body);
-		return log.ok(`linked ${rel(path.relative(P.home, dst))} -> ${src} (hc needs pi on its PATH)`);
+		log.ok(`linked ${rel(path.relative(P.home, dst))} -> ${src} (hc needs pi on its PATH)`);
+		return "linked";
 	}
 	const cur = isLink(dst) ? fs.readlinkSync(dst) : null;
-	if (cur === src) return;
-	if (cur === null && fs.existsSync(dst)) return log.warn(`${rel(path.relative(P.home, dst))} is a real file, not our link — leaving it alone`);
+	if (cur === src) return "linked";
+	if (cur === null && fs.existsSync(dst)) {
+		log.warn(`${rel(path.relative(P.home, dst))} is a real file, not our link — leaving it alone`);
+		return "present";
+	}
 	fs.mkdirSync(P.bin, { recursive: true });
 	if (cur !== null) fs.rmSync(dst, { force: true });
 	fs.symlinkSync(src, dst);
 	log.ok(`linked ${rel(path.relative(P.home, dst))} -> ${src} (hc needs pi on its PATH)`);
+	return "linked";
 }
 const isLink = (p) => {
 	try {
@@ -912,8 +939,9 @@ function selftest() {
 	}
 	// `pi` must be reachable where hc's core looks (~/.local/bin is first on its PATH)
 	if (has("pi")) {
-		linkPi();
-		if (!isLink(path.join(P.bin, IS_WIN ? "pi.cmd" : "pi")) && !fs.existsSync(path.join(P.bin, IS_WIN ? "pi.cmd" : "pi"))) [fail] = [fail + 1, log.err("linkPi did not link pi into ~/.local/bin")];
+		const linked = linkPi();
+		if (!linked) [fail] = [fail + 1, log.err("linkPi could not make pi reachable for hc")];
+		else if (linked === "linked" && !isLink(path.join(P.bin, IS_WIN ? "pi.cmd" : "pi")) && !fs.existsSync(path.join(P.bin, IS_WIN ? "pi.cmd" : "pi"))) [fail] = [fail + 1, log.err("linkPi reported a link it did not create")];
 	}
 	// models.json: providers kept local to this machine survive render/apply
 	const models = path.join(P.agent, "models.json");
