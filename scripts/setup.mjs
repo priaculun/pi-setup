@@ -71,7 +71,7 @@ const IGNORE = [
 	/(^|\/)node_modules(\/|$)/,
 ];
 /** settings.json keys Pi rewrites on its own. */
-const VOLATILE_SETTINGS = ["lastChangelogVersion"];
+const VOLATILE_SETTINGS = ["lastChangelogVersion", "extensionChangelogVersions"];
 /** Files that hold credentials once rendered -> chmod 600. */
 const SENSITIVE = new Set(["models.json", "mcp.json", "web-search.json", "config.json"]);
 
@@ -177,6 +177,8 @@ function plan(P = paths()) {
 				dst: path.join(m.live, liveRel),
 				tmpl,
 				merge: m.repo === "home/pi-agent" && liveRel === "settings.json",
+				// models.json: repo providers win, providers kept local to this machine survive a render.
+				mergeProviders: m.repo === "home/pi-agent" && liveRel === "models.json",
 				sensitive: tmpl && SENSITIVE.has(path.basename(liveRel)),
 				exec: Boolean(m.exec),
 			});
@@ -197,6 +199,14 @@ function desired(item, vars) {
 		return { text: `${JSON.stringify(next, null, 2)}\n`, view: managed(next), curView: fs.existsSync(item.dst) ? managed(cur) : null, missing: [] };
 	}
 	const { out, missing } = item.tmpl ? renderTemplate(raw, vars) : { out: raw, missing: [] };
+	if (item.mergeProviders && !missing.length) {
+		const repo = JSON.parse(out);
+		const cur = readJSON(item.dst, {});
+		const next = { ...cur, ...repo, providers: { ...(cur.providers ?? {}), ...(repo.providers ?? {}) } };
+		// Only the providers the repo manages are compared, so local-only ones are not drift.
+		const managed = (o) => JSON.stringify(Object.fromEntries(Object.keys(repo.providers ?? {}).map((k) => [k, o.providers?.[k]])));
+		return { text: `${JSON.stringify(next, null, 2)}\n`, view: managed(next), curView: fs.existsSync(item.dst) ? managed(cur) : null, missing: [] };
+	}
 	const cur = fs.existsSync(item.dst) ? fs.readFileSync(item.dst, "utf8") : null;
 	// Compare ignoring trailing whitespace / CRLF so editor newline habits are not "drift".
 	const norm = (s) => (s === null ? null : s.replace(/\r\n/g, "\n").replace(/\s*$/, "\n"));
@@ -384,15 +394,19 @@ function doctor() {
 
 	// packages
 	const settings = readJSON(path.join(P.agent, "settings.json"), {});
-	for (const src of settings.packages ?? []) {
-		const loc = packageDir(P, src);
-		const v = loc && fs.existsSync(loc) ? packageVersion(loc, src) : null;
-		const want = lock.packages?.[src];
-		add(v ? (want && want !== v ? "info" : "ok") : "error", "package", src, v ? `${v}${want && want !== v ? ` (lock ${want})` : ""}` : "not installed — run `pi update --extensions`");
+	for (const entry of settings.packages ?? []) {
+		const src = packageSource(entry);
+		const loc = packageDir(P, entry);
+		const v = loc && fs.existsSync(loc) ? packageVersion(loc, entry) : null;
+		const want = src && lock.packages?.[src];
+		const label = src ?? JSON.stringify(entry);
+		add(v ? (want && want !== v ? "info" : "ok") : "error", "package", label, v ? `${v}${want && want !== v ? ` (lock ${want})` : ""}` : "not installed — run `pi update --extensions`");
 	}
 	const repoPkgs = readJSON(path.join(REPO, "home/pi-agent/settings.json"), {}).packages ?? [];
-	for (const s of (settings.packages ?? []).filter((s) => !repoPkgs.includes(s))) add("warn", "package", s, "installed locally but not in repo — run capture");
-	for (const s of repoPkgs.filter((s) => !(settings.packages ?? []).includes(s))) add("warn", "package", s, "in repo but not in local settings — run apply");
+	const localSources = new Set((settings.packages ?? []).map(packageSource).filter(Boolean));
+	const repoSources = new Set(repoPkgs.map(packageSource).filter(Boolean));
+	for (const entry of settings.packages ?? []) if (packageSource(entry) && !repoSources.has(packageSource(entry))) add("warn", "package", packageSource(entry), "installed locally but not in repo — run capture");
+	for (const entry of repoPkgs) if (packageSource(entry) && !localSources.has(packageSource(entry))) add("warn", "package", packageSource(entry), "in repo but not in local settings — run apply");
 
 	// tool-managed resources
 	add(fs.existsSync(path.join(P.agent, "extensions", "herdr-agent-state.ts")) ? "ok" : "warn", "integration", "herdr -> pi", "herdr integration install pi");
@@ -410,7 +424,13 @@ function doctor() {
 }
 
 // ---------------------------------------------------------------- packages / lock
-function packageDir(P, src) {
+/** Pi accepts either a package source string or an object with a `source` field. */
+function packageSource(entry) {
+	return typeof entry === "string" ? entry : entry && typeof entry.source === "string" ? entry.source : null;
+}
+function packageDir(P, entry) {
+	const src = packageSource(entry);
+	if (!src) return null;
 	if (src.startsWith("npm:")) {
 		const name = src.slice(4).replace(/(?<=.)@[^/]*$/, ""); // strip @version
 		return path.join(P.agent, "npm", "node_modules", ...name.split("/"));
@@ -418,7 +438,9 @@ function packageDir(P, src) {
 	const m = src.replace(/^git:/, "https://").match(/^https?:\/\/([^/]+)\/([^/]+)\/([^/@#]+?)(?:\.git)?(?:[@#].*)?$/);
 	return m ? path.join(P.agent, "git", m[1], m[2], m[3]) : null;
 }
-function packageVersion(dir, src) {
+function packageVersion(dir, entry) {
+	const src = packageSource(entry);
+	if (!src) return null;
 	if (src.startsWith("npm:")) return readJSON(path.join(dir, "package.json"), {}).version ?? "?";
 	const r = run("git", ["-C", dir, "rev-parse", "--short", "HEAD"]);
 	const v = readJSON(path.join(dir, "package.json"), {}).version;
@@ -427,9 +449,11 @@ function packageVersion(dir, src) {
 function buildLock(P) {
 	const settings = readJSON(path.join(P.agent, "settings.json"), {});
 	const packages = {};
-	for (const s of settings.packages ?? []) {
-		const d = packageDir(P, s);
-		packages[s] = d && fs.existsSync(d) ? packageVersion(d, s) : "not-installed";
+	for (const entry of settings.packages ?? []) {
+		const src = packageSource(entry);
+		if (!src) continue;
+		const d = packageDir(P, entry);
+		packages[src] = d && fs.existsSync(d) ? packageVersion(d, entry) : "not-installed";
 	}
 	const tools = {};
 	for (const t of ["pi", "herdr", "tsk", "codebase-memory-mcp", "gh"]) {
@@ -467,8 +491,16 @@ function redactHost(url, varName, found) {
 }
 const isRef = (v) => typeof v === "string" && (/^\$\{?[A-Z_][A-Z0-9_]*\}?$/.test(v) || v.startsWith("!") || /^Bearer \$\{[A-Z0-9_]+\}$/.test(v));
 
+/**
+ * Providers that get captured into the repo. Everything else stays local to this machine, so a
+ * plain `capture` cannot leak a personal router setup (or its keys) back into the templates.
+ * Override with PI_CAPTURE_PROVIDERS="ontoken,other"; `*` captures every provider.
+ */
+const captureProviders = () =>
+	new Set((process.env.PI_CAPTURE_PROVIDERS ?? "ontoken").split(",").map((s) => s.trim()).filter(Boolean));
+
 /** Structural redaction per known file. Returns new text + discovered secret values. */
-function redact(liveRel, text) {
+function redact(liveRel, text, dropped = []) {
 	const found = {};
 	const base = path.basename(liveRel);
 	if (!liveRel.endsWith(".json")) return { text, found };
@@ -479,6 +511,12 @@ function redact(liveRel, text) {
 		if (!Object.keys(j.jev).length) delete j.jev;
 	}
 	if (base === "models.json") {
+		const keep = captureProviders();
+		for (const name of Object.keys(j.providers ?? {})) {
+			if (keep.has("*") || keep.has(name)) continue;
+			dropped.push(name);
+			delete j.providers[name];
+		}
 		for (const [name, p] of Object.entries(j.providers ?? {})) {
 			const v = `PI_KEY_${envName(name)}`;
 			if (p.apiKey && !isRef(p.apiKey)) [found[v], p.apiKey] = [p.apiKey, `\${${v}}`];
@@ -537,6 +575,7 @@ function capture() {
 	const newSecrets = {};
 	const changes = [];
 	const seen = new Set();
+	const dropped = [];
 
 	for (const m of mappings(P)) {
 		const liveFiles = new Set(m.files.filter((f) => fs.existsSync(path.join(m.live, f))));
@@ -544,7 +583,7 @@ function capture() {
 		for (const f of liveFiles) {
 			if (IGNORE.some((r) => r.test(f))) continue;
 			const raw = fs.readFileSync(path.join(m.live, f), "utf8");
-			const { text, found } = redact(f, raw);
+			const { text, found } = redact(f, raw, dropped);
 			Object.assign(newSecrets, found);
 			// Only files we redacted become templates (scripts like pr-gate use ${VAR} legitimately).
 			const isTmpl = Object.keys(found).length > 0;
@@ -593,6 +632,7 @@ function capture() {
 	}
 
 	changes.forEach((x) => log.info(x));
+	if (dropped.length) log.info(`providers kept local (PI_CAPTURE_PROVIDERS=${process.env.PI_CAPTURE_PROVIDERS ?? "ontoken"}): ${[...new Set(dropped)].sort().join(", ")}`);
 	lockDiff.forEach((x) => log.info(`lock: ${x}`));
 	secChanges.forEach((x) => log.warn(`secrets.env: ${x} — run \`secrets push\` to update the private store`));
 	if (!changes.length && !lockDiff.length) log.ok("repo already matches this machine");
@@ -807,10 +847,34 @@ function selftest() {
 	Object.assign(process.env, Object.fromEntries(Object.entries(saved).filter(([, v]) => v !== undefined)));
 	// redaction round-trip on a synthetic models/mcp file
 	const sample = JSON.stringify({ providers: { "x-y": { baseUrl: "http://100.100.1.2:4000/v1", apiKey: "sk-abcdefghijklmnopqrstuvwxyz" } } });
+	process.env.PI_CAPTURE_PROVIDERS = "*";
 	const red = redact("models.json", sample);
 	if (red.text.includes("sk-abc") || red.text.includes("100.100") || red.found.PI_KEY_X_Y !== "sk-abcdefghijklmnopqrstuvwxyz" || red.found.PI_HOST_X_Y !== "100.100.1.2") [fail] = [fail + 1, log.err("redaction failed")];
+	delete process.env.PI_CAPTURE_PROVIDERS;
+	// only the allowlisted provider survives capture; the rest never reach the repo
+	const two = JSON.stringify({ providers: { ontoken: { baseUrl: "https://api.ontoken.id/v1", apiKey: "sk-abcdefghijklmnopqrstuvwxyz" }, local: { baseUrl: "http://10.0.0.2:4000/v1", apiKey: "sk-localonlykey000000000000" } } });
+	const drop = [];
+	const one = redact("models.json", two, drop);
+	const parsed = JSON.parse(one.text);
+	if (Object.keys(parsed.providers).join() !== "ontoken" || drop.join() !== "local" || "PI_KEY_LOCAL" in one.found) [fail] = [fail + 1, log.err("provider allowlist failed")];
 	const mcp = redact("mcp.json", JSON.stringify({ mcpServers: { a: { url: "https://x.dev/mcp", headers: { Authorization: "Bearer hs-local-zzz" } } } }));
 	if (mcp.text.includes("hs-local") || !mcp.text.includes("Bearer ${MCP_A_TOKEN}")) [fail] = [fail + 1, log.err("mcp redaction failed")];
+	// package entries may be objects (e.g. remote-pi with a filtered extension)
+	if (packageSource("npm:x") !== "npm:x" || packageSource({ source: "npm:y", extensions: ["-dist/index.js"] }) !== "npm:y" || packageSource({}) !== null) [fail] = [fail + 1, log.err("package entry normalization failed")];
+	// models.json: providers kept local to this machine survive render/apply
+	const models = path.join(P.agent, "models.json");
+	const before = readJSON(models, {}).providers ?? {};
+	const localOnly = Object.keys(before).filter((k) => !captureProviders().has("*") && !captureProviders().has(k));
+	const savedProviders = Object.fromEntries(localOnly.map((k) => [k, before[k]]));
+	fs.writeFileSync(models, JSON.stringify({ ...readJSON(models, {}), providers: { local: { apiKey: "sk-localonly0000000000000000" }, ontoken: {} } }));
+	const stm = readJSON(P.state, { files: {} });
+	delete stm.files[models];
+	writeFile(P.state, JSON.stringify(stm));
+	const r4 = render();
+	const after = readJSON(models, {}).providers ?? {};
+	if (r4.drift.includes(".pi/agent/models.json") || !("local" in after) || !("ontoken" in after)) [fail] = [fail + 1, log.err("render dropped a local-only provider")];
+	if (render().written !== 0 || !("local" in (readJSON(models, {}).providers ?? {}))) [fail] = [fail + 1, log.err("merge render is not idempotent")];
+	fs.writeFileSync(models, JSON.stringify({ ...readJSON(models, {}), providers: { ...after, ...savedProviders } }));
 	// reset: everything moves to the backup, remote + secrets stay, re-render works from scratch
 	writeSecrets(P.secrets, fake);
 	writeFile(path.join(P.agent, "sessions", "s1.jsonl"), "{}\n");

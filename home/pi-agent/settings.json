@@ -2,16 +2,25 @@
   "packages": [
     "npm:pi-quiet-tools",
     "npm:pi-codebase-memory-mcp",
-    "npm:remote-pi",
+    {
+      "source": "npm:remote-pi",
+      "extensions": [
+        "-dist/index.js"
+      ]
+    },
     "npm:pi-web-access",
     "npm:pi-ayu-themes",
     "npm:pi-schedule-prompt",
     "npm:@tintinweb/pi-tasks",
-    "https://github.com/priaculun/self-compact",
     "https://github.com/priaculun/ontoken-auto",
     "npm:@ff-labs/pi-fff",
     "npm:@tintinweb/pi-subagents",
-    "https://github.com/priaculun/pc-better-custom"
+    "https://github.com/priaculun/pc-better-custom",
+    "git:github.com/miqdadbadjuber/anti-slop",
+    "npm:@sveltejs/pi",
+    "npm:@plannotator/pi-extension",
+    "npm:pi-advisor-flow",
+    "npm:billion-context"
   ],
   "theme": "ayu-dark",
   "defaultProvider": "ontoken",

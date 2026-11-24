@@ -33,14 +33,6 @@ source (table below), or copy the file from another machine over a secure channe
 | Name | Used in | Where to get it |
 |---|---|---|
 | `PI_KEY_ONTOKEN` | models.json → provider `ontoken` | ontoken.id dashboard → API keys |
-| `PI_KEY_BACK_LIM` | provider `back-lim` | limitrouter dashboard |
-| `PI_KEY_CFROUTER` | provider `cfrouter` | cfrouter.my.id dashboard |
-| `PI_KEY_GATEAI` | provider `gateai` | gateai.id dashboard |
-| `PI_KEY_ALFAROUTER` | provider `alfarouter` | self-hosted router (Tailscale) config |
-| `PI_HOST_ALFAROUTER` | provider `alfarouter` base URL | Tailscale IP of the router host (`tailscale status`) |
-| `PI_KEY_GRIDHUB_UJI` | provider `gridhub-uji` | griphubrouter.web.id dashboard |
-| `PI_KEY_OCTALABS` | provider `octalabs` | router.octalabs.id dashboard |
-| `PI_KEY_A6API` | provider `a6api` | a6api.com dashboard |
 | `MCP_ONTOKEN_MEDIA_TOKEN` | mcp.json → `ontoken-media` | ontoken.id dashboard (MCP token, not the API key) |
 | `MCP_HOST_HINDSIGHT_OMP` | mcp.json → `hindsight-omp` URL | Tailscale IP of the Hindsight server |
 | `MCP_HINDSIGHT_OMP_TOKEN` | mcp.json → `hindsight-omp` | Hindsight server config (`hs-local-…` token) |

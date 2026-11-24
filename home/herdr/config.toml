@@ -18,3 +18,8 @@ command = "herdr-tsk.open-board"
 key = "prefix+a"
 type = "plugin_action"
 command = "herdr-tsk.quick-capture"
+
+[ui]
+
+status_indicators = "dots"
+
