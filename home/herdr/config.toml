@@ -22,3 +22,4 @@ command = "herdr-tsk.quick-capture"
 [ui]
 
 status_indicators = "dots"
+

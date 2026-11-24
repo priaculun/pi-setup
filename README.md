@@ -74,6 +74,12 @@ All logic is one cross-platform Node script, `scripts/setup.mjs`:
 Safety: `render` never overwrites a file you changed locally (it compares against the hash it
 last wrote). It reports `drift` instead; `--force` overwrites and keeps a `.bak-<timestamp>` copy.
 
+`capture` copies only the providers listed in `PI_CAPTURE_PROVIDERS` (default `ontoken`) into
+`models.json.tmpl`; every other provider stays local and is reported as `providers kept local`.
+Use `PI_CAPTURE_PROVIDERS="ontoken,alfarouter"` to widen it, or `*` to capture all of them.
+On a machine that keeps extra local providers, never `apply --force` (it replaces `models.json`
+wholesale) — plain `apply` leaves the file alone and reports drift instead.
+
 ## Maintaining
 
 The machine you work on is the source of truth; the repo follows it.

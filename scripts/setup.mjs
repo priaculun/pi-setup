@@ -481,8 +481,16 @@ function redactHost(url, varName, found) {
 }
 const isRef = (v) => typeof v === "string" && (/^\$\{?[A-Z_][A-Z0-9_]*\}?$/.test(v) || v.startsWith("!") || /^Bearer \$\{[A-Z0-9_]+\}$/.test(v));
 
+/**
+ * Providers that get captured into the repo. Everything else stays local to this machine, so a
+ * plain `capture` cannot leak a personal router setup (or its keys) back into the templates.
+ * Override with PI_CAPTURE_PROVIDERS="ontoken,other"; `*` captures every provider.
+ */
+const captureProviders = () =>
+	new Set((process.env.PI_CAPTURE_PROVIDERS ?? "ontoken").split(",").map((s) => s.trim()).filter(Boolean));
+
 /** Structural redaction per known file. Returns new text + discovered secret values. */
-function redact(liveRel, text) {
+function redact(liveRel, text, dropped = []) {
 	const found = {};
 	const base = path.basename(liveRel);
 	if (!liveRel.endsWith(".json")) return { text, found };
@@ -493,6 +501,12 @@ function redact(liveRel, text) {
 		if (!Object.keys(j.jev).length) delete j.jev;
 	}
 	if (base === "models.json") {
+		const keep = captureProviders();
+		for (const name of Object.keys(j.providers ?? {})) {
+			if (keep.has("*") || keep.has(name)) continue;
+			dropped.push(name);
+			delete j.providers[name];
+		}
 		for (const [name, p] of Object.entries(j.providers ?? {})) {
 			const v = `PI_KEY_${envName(name)}`;
 			if (p.apiKey && !isRef(p.apiKey)) [found[v], p.apiKey] = [p.apiKey, `\${${v}}`];
@@ -551,6 +565,7 @@ function capture() {
 	const newSecrets = {};
 	const changes = [];
 	const seen = new Set();
+	const dropped = [];
 
 	for (const m of mappings(P)) {
 		const liveFiles = new Set(m.files.filter((f) => fs.existsSync(path.join(m.live, f))));
@@ -558,7 +573,7 @@ function capture() {
 		for (const f of liveFiles) {
 			if (IGNORE.some((r) => r.test(f))) continue;
 			const raw = fs.readFileSync(path.join(m.live, f), "utf8");
-			const { text, found } = redact(f, raw);
+			const { text, found } = redact(f, raw, dropped);
 			Object.assign(newSecrets, found);
 			// Only files we redacted become templates (scripts like pr-gate use ${VAR} legitimately).
 			const isTmpl = Object.keys(found).length > 0;
@@ -607,6 +622,7 @@ function capture() {
 	}
 
 	changes.forEach((x) => log.info(x));
+	if (dropped.length) log.info(`providers kept local (PI_CAPTURE_PROVIDERS=${process.env.PI_CAPTURE_PROVIDERS ?? "ontoken"}): ${[...new Set(dropped)].sort().join(", ")}`);
 	lockDiff.forEach((x) => log.info(`lock: ${x}`));
 	secChanges.forEach((x) => log.warn(`secrets.env: ${x} — run \`secrets push\` to update the private store`));
 	if (!changes.length && !lockDiff.length) log.ok("repo already matches this machine");
@@ -821,8 +837,16 @@ function selftest() {
 	Object.assign(process.env, Object.fromEntries(Object.entries(saved).filter(([, v]) => v !== undefined)));
 	// redaction round-trip on a synthetic models/mcp file
 	const sample = JSON.stringify({ providers: { "x-y": { baseUrl: "http://100.100.1.2:4000/v1", apiKey: "sk-abcdefghijklmnopqrstuvwxyz" } } });
+	process.env.PI_CAPTURE_PROVIDERS = "*";
 	const red = redact("models.json", sample);
 	if (red.text.includes("sk-abc") || red.text.includes("100.100") || red.found.PI_KEY_X_Y !== "sk-abcdefghijklmnopqrstuvwxyz" || red.found.PI_HOST_X_Y !== "100.100.1.2") [fail] = [fail + 1, log.err("redaction failed")];
+	delete process.env.PI_CAPTURE_PROVIDERS;
+	// only the allowlisted provider survives capture; the rest never reach the repo
+	const two = JSON.stringify({ providers: { ontoken: { baseUrl: "https://api.ontoken.id/v1", apiKey: "sk-abcdefghijklmnopqrstuvwxyz" }, local: { baseUrl: "http://10.0.0.2:4000/v1", apiKey: "sk-localonlykey000000000000" } } });
+	const drop = [];
+	const one = redact("models.json", two, drop);
+	const parsed = JSON.parse(one.text);
+	if (Object.keys(parsed.providers).join() !== "ontoken" || drop.join() !== "local" || "PI_KEY_LOCAL" in one.found) [fail] = [fail + 1, log.err("provider allowlist failed")];
 	const mcp = redact("mcp.json", JSON.stringify({ mcpServers: { a: { url: "https://x.dev/mcp", headers: { Authorization: "Bearer hs-local-zzz" } } } }));
 	if (mcp.text.includes("hs-local") || !mcp.text.includes("Bearer ${MCP_A_TOKEN}")) [fail] = [fail + 1, log.err("mcp redaction failed")];
 	// package entries may be objects (e.g. remote-pi with a filtered extension)

@@ -10,6 +10,8 @@ Follow the steps in order. Do not improvise around failures; report them.
 - Never commit `secrets.env`, `*.bak-*`, or anything under `~/.pi/agent/{sessions,git,npm/node_modules}`.
 - Do not edit files under `~/.pi/agent` by hand to "make it work" — fix the repo and re-run `apply`.
 - Ask the user before: `reset`, `apply --force`, `capture --prune`, `secrets push`, installing extra system packages.
+- `capture` only copies the providers in `PI_CAPTURE_PROVIDERS` (default `ontoken`); other providers
+  stay local to the machine. Widen it explicitly, never by habit.
 - Files written by other tools are **not** managed here (do not copy them in):
   `extensions/herdr-agent-state.ts` (herdr), `skills/tsk-cli` (tsk), `~/.pi/remote/skills/agent-network` (remote-pi).
 
