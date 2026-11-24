@@ -203,10 +203,8 @@ run_checks() {
 	fi
 }
 
-notify() { # best-effort notification: hc terminal (agent reports), else macOS/desktop
-	if [ -n "${HC_TERMINAL_ID:-}" ] && command -v hc >/dev/null 2>&1; then
-		hc send "$HC_TERMINAL_ID" "$1 — $2" >/dev/null 2>&1 || true
-	elif [ "$(uname -s)" = Darwin ] && command -v osascript >/dev/null 2>&1; then
+notify() { # best-effort desktop notification (a merge usually runs inside an agent, which sees the output itself)
+	if [ "$(uname -s)" = Darwin ] && command -v osascript >/dev/null 2>&1; then
 		# argv, not string concatenation: a PR title is attacker-adjacent text, not AppleScript source.
 		osascript - "$1" "$2" >/dev/null 2>&1 <<-'APPLESCRIPT' || true
 			on run argv

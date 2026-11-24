@@ -14,6 +14,10 @@ Ground rules:
 Definition of done:
 1. PR open and not a draft (`git push -u origin HEAD`, then `gh pr create --fill --title "<TASK>: …"`).
 2. CI green and the branch up to date with `origin/main` (`pr-gate check <pr>` shows only `review` failing).
-3. Report back with `hc send $HC_TERMINAL_ID "<PR number, what changed, what you verified, anything the reviewer must know>"`.
+3. Report back to the terminal that started you — your own id is not the coordinator:
+   ```bash
+   hc send "$(hc get "$HC_TERMINAL_ID" --json | jq -r .parent)" "<PR number, what changed, what you verified, anything the reviewer must know>"
+   ```
+   If your task text named an address (the coordinator pastes one), use that instead.
 
 After 3 failed attempts at the same red CI, stop and report the failure with the failing log lines.

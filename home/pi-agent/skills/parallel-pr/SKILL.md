@@ -25,8 +25,11 @@ Never sleep or poll — `hc wait` is the only way to wait.
    ```bash
    git fetch origin
    git worktree add ../<repo>-t12 -b t12-<slug> origin/main
-   hc run --bg --name t12 --cwd ../<repo>-t12 worker "<task spec: goal, files in scope, out of scope, acceptance criteria>"
+   hc run --bg --name t12 --cwd ../<repo>-t12 worker "<task spec: goal, files in scope, out of scope, acceptance criteria>. Report with hc send $HC_TERMINAL_ID"
    ```
+   The `$HC_TERMINAL_ID` in that string is expanded by **your** shell into your own address, so the
+   worker gets a literal terminal to report to. Do not rely on a template to do this: a template body
+   is a static file and would expand to the worker's own id.
    `worker` is a template in `~/.config/herdr-core/templates/` (`hc templates` lists them with
    their command). Without a template, start the agent explicitly and wait for readiness first:
    ```bash
@@ -60,8 +63,10 @@ Never sleep or poll — `hc wait` is the only way to wait.
 - Small focused commits. Run tests/lint/typecheck locally before pushing.
 - Open the PR early: `git push -u origin HEAD` then `gh pr create --fill --title "T12: …"` (draft while WIP).
 - **Done = all of:** PR open & not draft, CI green, branch up to date with `origin/main`
-  (`pr-gate check <pr>` shows only `review` failing), and a summary sent with
-  `hc send $HC_TERMINAL_ID "<summary>"`.
+  (`pr-gate check <pr>` shows only `review` failing), and a summary sent to the coordinator.
+  Your task text carries the coordinator's address; if it does not, use your parent:
+  `hc send "$(hc get "$HC_TERMINAL_ID" --json | jq -r .parent)" "<summary>"` —
+  never `hc send $HC_TERMINAL_ID`, that is your own terminal.
 - CI red → fix and push. After **3 failed fix attempts**, stop and report the failure + logs.
 - Conflicts → `git fetch && git rebase origin/main`, resolve, re-test, `git push --force-with-lease`.
 - Never: merge, push to main, plain `--force`, edit `review:*`/`human:*` labels, run `pr-gate approve`.

@@ -15,4 +15,5 @@ Method:
    - `pr-gate review <pr> changes --body "<findings>"`
    Raise the risk tier (`--risk medium|high`) when the change is riskier than its paths suggest. You can raise, never lower.
 
-Report back with `hc send $HC_TERMINAL_ID "<verdict, findings, risk>"`. Do not start other agents.
+Report back to the terminal that started you — your own id is not the coordinator:
+`hc send "$(hc get "$HC_TERMINAL_ID" --json | jq -r .parent)" "<verdict, findings, risk>"`. Do not start other agents.

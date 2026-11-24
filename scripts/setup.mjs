@@ -437,15 +437,12 @@ function doctor() {
 	for (const entry of repoPkgs) if (packageSource(entry) && !localSources.has(packageSource(entry))) add("warn", "package", packageSource(entry), "in repo but not in local settings — run apply");
 
 	// tool-managed resources: hc reads the roles we ship and Pi reports its status to it over OSC 7501.
+	// Count the rendered files instead of running `hc templates`: asking hc can start a core on a fresh machine.
 	const tplRepo = walk(path.join(REPO, "home/herdr-core/templates")).filter((f) => f.endsWith(".md")).length;
 	if (!has("hc")) add("warn", "integration", "hc templates", "hc not installed — ./bootstrap.sh");
 	else {
-		const t = run("hc", ["templates"]);
-		let n = null;
-		try {
-			n = JSON.parse(t.out).templates.length;
-		} catch {}
-		add(n === null || n < tplRepo ? "warn" : "ok", "integration", "hc templates", n === null ? "cannot read `hc templates`" : `${n} available, repo has ${tplRepo} — hc run <name> \"task\"`);
+		const tplLive = walk(path.join(P.herdrCore, "templates")).filter((f) => f.endsWith(".md")).length;
+		add(tplLive >= tplRepo ? "ok" : "warn", "integration", "hc templates", `${tplLive} rendered, repo has ${tplRepo} — hc run <name>`);
 	}
 
 	if (flag("--json")) console.log(JSON.stringify(rows, null, 2));
@@ -904,6 +901,8 @@ function selftest() {
 		const cmd = t.match(/^command:\s*(.+)$/m)?.[1] ?? "";
 		if (!cmd.startsWith("pi ") || !cmd.includes("--model ")) [fail] = [fail + 1, log.err(`hc template ${name}: needs a \`command: pi --model <provider/model>\``)];
 		if (!/^---\n[\s\S]*?\n---\n/.test(t)) [fail] = [fail + 1, log.err(`hc template ${name}: frontmatter missing`)];
+		// a template body is expanded by the CHILD's shell: `$HC_TERMINAL_ID` there reports into itself
+		if (/hc send\s+\$HC_TERMINAL_ID/.test(t)) [fail] = [fail + 1, log.err(`hc template ${name}: report to the parent, not to $HC_TERMINAL_ID`)];
 	}
 	// `pi` must be reachable where hc's core looks (~/.local/bin is first on its PATH)
 	if (has("pi")) {

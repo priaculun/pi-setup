@@ -14,4 +14,5 @@ Method:
    If the work splits into independent tasks, say how (one branch/worktree/PR per task) and which tasks share files.
 5. State explicitly what you did NOT check.
 
-Report the plan back with `hc send $HC_TERMINAL_ID "<plan>"` — or write it to a file and send the path when it is long.
+Report the plan back to the terminal that started you — your own id is not the coordinator:
+`hc send "$(hc get "$HC_TERMINAL_ID" --json | jq -r .parent)" "<plan>"` — or write it to a file and send the path when it is long.
