@@ -15,7 +15,7 @@ Follow the steps in order. Do not improvise around failures; report them.
 - `models.json` is merged by provider name on render, so local-only providers survive `apply`.
   Do not hand-edit the template to add one — widen `PI_CAPTURE_PROVIDERS` instead.
 - Files written by other tools are **not** managed here (do not copy them in):
-  `extensions/herdr-agent-state.ts` (herdr), `skills/tsk-cli` (tsk), `~/.pi/remote/skills/agent-network` (remote-pi).
+  `skills/tsk-cli` (the `tsk` CLI, no longer installed), `~/.pi/remote/skills/agent-network` (remote-pi).
 
 ## 1. Detect the platform
 
@@ -52,7 +52,7 @@ node scripts/setup.mjs reset              # refuses while any pi process is runn
 
 | reset does | Details |
 |---|---|
-| Moves to backup | everything in `~/.pi/agent` (settings, models, mcp, extensions, skills, sessions, auth, caches) + herdr `config.toml` |
+| Moves to backup | everything in `~/.pi/agent` (settings, models, mcp, extensions, skills, sessions, auth, caches) + hc `config.toml` |
 | Keeps | Pi install (`~/.pi/agent/{bin,install,win-git-bash}` of the official installer), `~/.pi/remote` (phone pairing), `secrets.env` |
 | Removes | `~/.config/pi-setup/state.json` (so render treats the machine as new) |
 
@@ -68,13 +68,15 @@ node scripts/setup.mjs reset              # refuses while any pi process is runn
 ```
 
 `apply` = render files → `pi update --extensions` (installs all packages from `settings.json`)
-→ `herdr integration install pi`, `tsk setup herdr`, `tsk setup pi`, codebase-memory config → `doctor`.
+→ link `pi` into `~/.local/bin` (hc's PATH) → `hc --version` check, codebase-memory config → `doctor`.
 
 ## 4. Verify
 
 ```sh
 node scripts/setup.mjs doctor           # must end with "0 error(s)"
 pi list                                 # 16 packages
+hc templates                            # worker, reviewer, planner
+hc server status                        # core running; `hc ls` lists terminals
 pi -p --no-session "say ok"             # model + key work
 ```
 

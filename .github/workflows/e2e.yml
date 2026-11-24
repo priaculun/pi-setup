@@ -1,6 +1,6 @@
 name: e2e
 # Full install on clean runners: bootstrap (tools only) + apply with fake secrets.
-# Manual: it downloads Pi, herdr, tsk, codebase-memory-mcp and all Pi packages.
+# Manual: it downloads Pi, hc (herdr-core), codebase-memory-mcp and all Pi packages.
 on:
   workflow_dispatch:
 

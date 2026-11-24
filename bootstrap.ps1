@@ -27,7 +27,7 @@ function Node-Ok {
 }
 Refresh-Path
 
-$toolList = "git", "gh", "jq", "node", "pi", "herdr", "tsk", "codebase-memory-mcp"
+$toolList = "git", "gh", "jq", "node", "pi", "hc", "codebase-memory-mcp"
 if ($Check) {
   foreach ($t in $toolList) { if (Have $t) { "  ok       $t" } else { "  missing  $t" } }
   if (-not (Node-Ok)) { "  node >= 22.19 required" }
@@ -54,14 +54,9 @@ if (-not (Have pi)) {
   Invoke-RestMethod https://pi.dev/install.ps1 | Invoke-Expression
   Refresh-Path
 }
-if (-not (Have herdr)) {
-  Say "install herdr"
-  Invoke-RestMethod https://herdr.dev/install.ps1 | Invoke-Expression
-  Refresh-Path
-}
-if (-not (Have tsk)) {
-  Say "install tsk"
-  Invoke-RestMethod https://www.gettsk.sh/install.ps1 | Invoke-Expression
+if (-not (Have hc)) {
+  Say "install hc (herdr-core)"
+  Invoke-RestMethod https://releases.herdr.dev/core/install.ps1 | Invoke-Expression
   Refresh-Path
 }
 if (-not (Have codebase-memory-mcp)) {
@@ -82,6 +77,25 @@ if ($userPath -notlike "*$localBin*") {
   Say "added $localBin to user PATH"
 }
 Refresh-Path
+
+# hc starts programs with the core's own PATH: give it a `pi.cmd` next to pr-gate so
+# `hc run ... pi` resolves. apply re-creates this too.
+# cmd.exe reads a .cmd in the OEM code page, so a non-ASCII install path cannot be
+# embedded safely; put that directory on PATH for the core instead.
+if (Have pi) {
+  $piCmd = (Get-Command pi).Source
+  $piDir = Split-Path $piCmd
+  if ($piDir -ne $localBin) {
+    if ($piCmd -match "[^\x00-\x7F]") {
+      $up = [Environment]::GetEnvironmentVariable("Path", "User")
+      if ($up -notlike "*$piDir*") { [Environment]::SetEnvironmentVariable("Path", "$up;$piDir", "User") }
+      Say "pi path is not ASCII - added $piDir to user PATH for hc instead of a pi.cmd shim"
+    } else {
+      "@echo off`r`n""$piCmd"" %*`r`n" | Set-Content -NoNewline -Encoding oem (Join-Path $localBin "pi.cmd")
+      Say "wrote $(Join-Path $localBin 'pi.cmd') -> $piCmd"
+    }
+  }
+}
 
 if ($Tools) { Say "tools done"; exit 0 }
 

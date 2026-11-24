@@ -203,9 +203,16 @@ run_checks() {
 	fi
 }
 
-notify() { # best-effort desktop/herdr notification
-	if [ "${HERDR_ENV:-}" = 1 ] && command -v herdr >/dev/null 2>&1; then
-		herdr notification show "$1" --body "$2" --sound "done" >/dev/null 2>&1 || true
+notify() { # best-effort desktop notification (a merge usually runs inside an agent, which sees the output itself)
+	if [ "$(uname -s)" = Darwin ] && command -v osascript >/dev/null 2>&1; then
+		# argv, not string concatenation: a PR title is attacker-adjacent text, not AppleScript source.
+		osascript - "$1" "$2" >/dev/null 2>&1 <<-'APPLESCRIPT' || true
+			on run argv
+				display notification (item 2 of argv) with title (item 1 of argv)
+			end run
+		APPLESCRIPT
+	elif command -v notify-send >/dev/null 2>&1; then
+		notify-send "$1" "$2" >/dev/null 2>&1 || true
 	fi
 }
 

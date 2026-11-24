@@ -37,7 +37,7 @@ renders the config, installs every Pi package and runs `doctor`.
 | npm peer-fix hook | `home/pi-agent/npm/` | `~/.pi/agent/npm/` |
 | Extension configs | `home/pi-agent/{ontoken-auto,web-search,better-custom.state}.json` | `~/.pi/agent/` |
 | remote-pi relay | `home/pi-remote/config.json.tmpl` | `~/.pi/remote/config.json` |
-| herdr config | `home/herdr/config.toml` | `~/.config/herdr/` · Windows `%APPDATA%\herdr\` |
+| hc (herdr-core) config + role templates | `home/herdr-core/` | `~/.config/herdr-core/` · Windows `%APPDATA%\herdr-core\` |
 | pr-gate (merge gate) | `bin/pr-gate` | `~/.local/bin/pr-gate` (+ `pr-gate.cmd` on Windows) |
 | Version pins | `packages.lock.json` | — (checked by `doctor`) |
 
@@ -48,13 +48,16 @@ pi-quiet-tools, pi-codebase-memory-mcp, remote-pi, pi-web-access, pi-ayu-themes,
 [ontoken-auto](https://github.com/priaculun/ontoken-auto),
 [pc-better-custom](https://github.com/priaculun/pc-better-custom).
 
-Tools: Node ≥ 22.19, git, gh, jq, Pi, [herdr](https://herdr.dev), [tsk](https://gettsk.sh),
+Tools: Node ≥ 22.19, git, gh, jq, Pi, [hc / herdr-core](https://herdr.dev/core),
 [codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp). Windows also needs Git Bash (for `pr-gate`).
+
+`hc` is the terminal runtime the agents run in: `hc run --bg --name review reviewer "…"`, then
+`hc wait` / `hc send` / `hc read`. `bootstrap` also links `pi` into `~/.local/bin`, because hc starts
+programs with the core's own PATH (no `~/.bun/bin`) — without that link `hc run … pi` fails with `spawn_failed`.
 
 **Not managed here on purpose:** sessions, auth/OAuth stores (`auth.json`, `mcp-auth.json`), caches,
 `trust.json` (machine paths), remote-pi pairing (`peers.json`), and files other tools install
-themselves (`herdr integration install pi`, `tsk setup pi|herdr`, remote-pi's agent-network skill) —
-`apply` runs those installers instead.
+themselves (remote-pi's agent-network skill) — `apply` runs those installers instead.
 
 ## Commands
 
@@ -106,7 +109,7 @@ bootstrap.sh / bootstrap.ps1   prerequisites + tools, then apply
 scripts/setup.mjs              render / doctor / capture / scan / secrets
 home/pi-agent/                 -> ~/.pi/agent
 home/pi-remote/                -> ~/.pi/remote
-home/herdr/                    -> herdr config dir
+home/herdr-core/               -> hc (herdr-core) config + templates
 bin/                           -> ~/.local/bin
 packages.lock.json             versions captured from the last capture
 secrets.env.example            names of every secret
