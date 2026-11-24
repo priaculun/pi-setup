@@ -66,6 +66,7 @@ function mappings(P = paths()) {
 /** Live files installed/managed by other tools — never captured. */
 const IGNORE = [
 	/^skills\/tsk-cli(\/|$)/, // written by the `tsk` CLI (no longer installed)
+	/^extensions\/herdr-agent-state\.ts$/, // written by `herdr integration install pi`; a machine that still has it must not push it back
 	/(^|\/)\.DS_Store$/,
 	/\.bak(-\d+)?$/,
 	/(^|\/)node_modules(\/|$)/,
@@ -342,9 +343,14 @@ function linkPi() {
 	const dst = path.join(P.bin, IS_WIN ? "pi.cmd" : "pi");
 	const onPath = run(IS_WIN ? "where" : "sh", IS_WIN ? ["pi"] : ["-c", "command -v pi"]);
 	if (onPath.code !== 0) return log.warn("`pi` not on PATH — hc templates cannot start an agent (install Pi first)");
-	const src = onPath.out.split(/\r?\n/)[0].trim();
+	// `where` can list an extension-less npm shim first; a .cmd that calls it would fail.
+	const lines = onPath.out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+	const src = (IS_WIN ? lines.find((l) => /\.(cmd|exe)$/i.test(l)) : lines[0]) ?? lines[0];
+	if (!src) return log.warn("could not resolve `pi` on PATH — hc templates cannot start an agent");
 	if (path.dirname(src) === P.bin) return; // already reachable where hc looks
 	if (IS_WIN) {
+		// cmd.exe reads a .cmd in the OEM code page, so a non-ASCII path cannot be embedded.
+		if (/[^\x00-\x7F]/.test(src)) return log.warn(`${src} is not ASCII — add ${path.dirname(src)} to PATH for hc instead of a pi.cmd shim`);
 		const body = `@echo off\r\n"${src}" %*\r\n`;
 		if (fs.existsSync(dst) && fs.readFileSync(dst, "utf8") === body) return;
 		writeFile(dst, body);
@@ -897,7 +903,7 @@ function selftest() {
 	// hc role templates ship in the repo: they must render with a usable command, or `hc run <name>` breaks
 	const tplDir = path.join(P.herdrCore, "templates");
 	for (const name of ["worker", "reviewer", "planner"]) {
-		const t = fs.existsSync(path.join(tplDir, `${name}.md`)) ? fs.readFileSync(path.join(tplDir, `${name}.md`), "utf8") : "";
+		const t = fs.existsSync(path.join(tplDir, `${name}.md`)) ? fs.readFileSync(path.join(tplDir, `${name}.md`), "utf8").replace(/\r\n/g, "\n") : "";
 		const cmd = t.match(/^command:\s*(.+)$/m)?.[1] ?? "";
 		if (!cmd.startsWith("pi ") || !cmd.includes("--model ")) [fail] = [fail + 1, log.err(`hc template ${name}: needs a \`command: pi --model <provider/model>\``)];
 		if (!/^---\n[\s\S]*?\n---\n/.test(t)) [fail] = [fail + 1, log.err(`hc template ${name}: frontmatter missing`)];

@@ -80,11 +80,20 @@ Refresh-Path
 
 # hc starts programs with the core's own PATH: give it a `pi.cmd` next to pr-gate so
 # `hc run ... pi` resolves. apply re-creates this too.
+# cmd.exe reads a .cmd in the OEM code page, so a non-ASCII install path cannot be
+# embedded safely; put that directory on PATH for the core instead.
 if (Have pi) {
   $piCmd = (Get-Command pi).Source
-  if ((Split-Path $piCmd) -ne $localBin) {
-    "@echo off`r`n""$piCmd"" %*`r`n" | Set-Content -NoNewline -Encoding ascii (Join-Path $localBin "pi.cmd")
-    Say "wrote $(Join-Path $localBin 'pi.cmd') -> $piCmd"
+  $piDir = Split-Path $piCmd
+  if ($piDir -ne $localBin) {
+    if ($piCmd -match "[^\x00-\x7F]") {
+      $up = [Environment]::GetEnvironmentVariable("Path", "User")
+      if ($up -notlike "*$piDir*") { [Environment]::SetEnvironmentVariable("Path", "$up;$piDir", "User") }
+      Say "pi path is not ASCII - added $piDir to user PATH for hc instead of a pi.cmd shim"
+    } else {
+      "@echo off`r`n""$piCmd"" %*`r`n" | Set-Content -NoNewline -Encoding oem (Join-Path $localBin "pi.cmd")
+      Say "wrote $(Join-Path $localBin 'pi.cmd') -> $piCmd"
+    }
   }
 }
 
